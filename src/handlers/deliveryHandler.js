@@ -1,0 +1,449 @@
+const { Movie, Room, User } = require('../database');
+const { decodeMovieLink, sleep, sendToLogChannel, encodeMovieLink } = require('../utils/helpers');
+const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
+
+// Auto-delete a bot message after N milliseconds
+const autoDelete = async (api, chatId, messageId, ms = 10 * 60 * 1000) => {
+    await sleep(ms);
+    try { await api.deleteMessage(chatId, messageId); } catch (_) { }
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Force Subscribe Check
+// ────────────────────────────────────────────────────────────────────
+async function checkForceSub(ctx) {
+    const forceSubChannel = await getSetting('forceSubChannel', null);
+    if (!forceSubChannel) return true; // Not configured → pass
+
+    try {
+        const member = await ctx.api.getChatMember(forceSubChannel, ctx.from.id);
+        const allowed = ['member', 'administrator', 'creator'].includes(member.status);
+        return allowed;
+    } catch (e) {
+        console.error('[ForceSub] Could not check membership:', e.message);
+        return true; // Fail open if check errors
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Main Handler
+// ────────────────────────────────────────────────────────────────────
+module.exports = (bot) => {
+    bot.command('start', async (ctx, next) => {
+        if (ctx.chat.type !== 'private') return next();
+
+        // Save user to DB
+        await User.findOneAndUpdate(
+            { userId: ctx.from.id },
+            { $setOnInsert: { userId: ctx.from.id, joinedAt: new Date() } },
+            { upsert: true, returnDocument: 'after' }
+        );
+
+        const payload = ctx.match;
+        let isVerified = false;
+        let moviePayload = payload;
+
+        if (payload && payload.startsWith('v_')) {
+            isVerified = true;
+            moviePayload = payload.substring(2);
+        }
+
+        // ─── No Payload → Welcome ───────────────────────────────────
+        if (!moviePayload) {
+            const welcome = await ctx.reply(
+                `👋 <b>HELLO WELCOME!</b>\n\n` +
+                `I am your clips assistant bot 🤖\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `🎬 <b>HOW TO USE:</b>\n\n` +
+                `1️⃣ Go to our group\n` +
+                `   👉 <a href="https://t.me/${process.env.GROUP_ID?.replace('-100', '')}">Click Here</a>\n\n` +
+                `2️⃣ Type any movie name\n` +
+                `   Example: <code>Leo</code> or <code>Jawan</code>\n\n` +
+                `3️⃣ Click the button I send\n` +
+                `   I will send all clips to your PM! 📬\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `💡 <b>TIPS:</b>\n` +
+                `• Type <code>/filters</code> in group to see all movies\n` +
+                `• Type movie name correctly for best results\n` +
+                `• Ask admin if clips not found!\n\n` +
+                `🎉 Enjoy your clips! 🍿`,
+                { parse_mode: 'HTML', disable_web_page_preview: true }
+            );
+            autoDelete(ctx.api, ctx.chat.id, welcome.message_id);
+            return;
+        }
+
+        // ─── Token Claim: /start token_USERID ───────────────────────
+        if (moviePayload.startsWith('token_')) {
+            const userId = moviePayload.replace('token_', '');
+
+            if (ctx.from.id.toString() !== userId) {
+                const e = await ctx.reply('❌ This token link belongs to another user.');
+                autoDelete(ctx.api, ctx.chat.id, e.message_id);
+                return;
+            }
+
+            const expiresAt = await grantToken(userId);
+            const expireStr = expiresAt.toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+            const msg = await ctx.reply(
+                `🎫 <b>24-HOUR PASS ACTIVATED</b> 🎫\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `✅ <b>Status:</b> Full Access Granted\n` +
+                `⏰ <b>Expires:</b> Today at ${expireStr}\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `<i>You can now receive unlimited clips instantly from the group. Happy viewing! 🎬</i>`,
+                { parse_mode: 'HTML' }
+            );
+            autoDelete(ctx.api, ctx.chat.id, msg.message_id);
+            await sendToLogChannel(bot, `🎫 *Token Granted*\nUser: \`${userId}\` (@${ctx.from.username || 'N/A'})`);
+            return;
+        }
+
+        // ─── Movie Delivery: /start ENCODED_MOVIE ───────────────────
+        const movieName = decodeMovieLink(moviePayload);
+        if (!movieName) {
+            const e = await ctx.reply('❌ <b>Link Expired!</b>\n\nThis link is old. Please search again in our group! 👆');
+            autoDelete(ctx.api, ctx.chat.id, e.message_id);
+            return;
+        }
+
+        const movie = await Movie.findOne({ title: movieName });
+        if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
+            const e = await ctx.reply('❌ <b>Clips Not Available!</b>\n\nThis content is removed. Please ask admin to add it! 😢');
+            autoDelete(ctx.api, ctx.chat.id, e.message_id);
+            return;
+        }
+
+        // ─── Check Monetization Mode ─────────────────────────────────
+        const mode = await getSetting('mode', 'off');
+
+        if (mode === 'token') {
+            const validToken = await hasValidToken(ctx.from.id);
+
+            if (!validToken) {
+                const botUsername = process.env.BOT_USERNAME || ctx.me?.username || '';
+                const tokenStartUrl = `https://t.me/${botUsername}?start=token_${ctx.from.id}`;
+                const wrappedUrl = await wrapShortlink(tokenStartUrl);
+
+                const msg = await ctx.reply(
+                    `🔐 <b>VERIFY TO GET CLIPS</b>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `You need <b>Pass</b> to get clips! 🎫\n\n` +
+                    `📝 <b>Easy Steps:</b>\n` +
+                    `1️⃣ Click button below\n` +
+                    `2️⃣ Complete simple verification\n` +
+                    `3️⃣ Come back here!\n\n` +
+                    `Verification takes only 30 seconds! ⏱️\n\n` +
+                    `❤️ Support us by verifying!`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '🎫 Get Pass & Watch Movies', url: wrappedUrl }]]
+                        }
+                    }
+                );
+                autoDelete(ctx.api, ctx.chat.id, msg.message_id);
+                await sendToLogChannel(bot, `🔒 *Token Required*\nUser: \`${ctx.from.id}\`\nMovie: _${movie.title}_`);
+                return;
+            }
+
+            const timeLeft = await getTokenExpiry(ctx.from.id);
+            const waitMsg = await ctx.reply(
+                `🎫 <b>Pass Valid</b> — ${timeLeft} remaining\n\n⏳ Fetching your clips, please wait...`,
+                { parse_mode: 'HTML' }
+            );
+            autoDelete(ctx.api, ctx.chat.id, waitMsg.message_id);
+            await deliverMovie(ctx, bot, movie, waitMsg.message_id);
+
+        } else if (mode === 'shortlink' && !isVerified) {
+            const botUsername = process.env.BOT_USERNAME || ctx.me?.username || '';
+            const verifiedStart = `https://t.me/${botUsername}?start=v_${moviePayload}`;
+
+            const wrapMsg = await ctx.reply(
+                `🔗 <b>Preparing your link...</b>\n\n📽️ Movie: <b>${movie.title}</b>\n🎬 Clips: ${movie.files?.length || movie.messageIds.length}`,
+                { parse_mode: 'HTML' }
+            );
+
+            const wrappedUrl = await wrapShortlink(verifiedStart);
+
+            await ctx.api.editMessageText(
+                ctx.chat.id, wrapMsg.message_id,
+                `🎬 <b>${movie.title}</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `📂 <b>${movie.files?.length || movie.messageIds.length} clips</b> ready for you!\n\n` +
+                `👇 <b>CLICK BELOW</b> to get all clips!\n\n` +
+                `🔗 Link opens your private movie room`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '▶️ Get My Clips Now', url: wrappedUrl }]]
+                    }
+                }
+            );
+            autoDelete(ctx.api, ctx.chat.id, wrapMsg.message_id);
+            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: <code>${ctx.from.id}</code> (@${ctx.from.username || 'N/A'})\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
+            return;
+
+        } else {
+            // Mode OFF → deliver directly
+            const waitMsg = await ctx.reply(
+                `⏳ <b>Preparing your movies...</b>\n\n📽️ <b>${movie.title}</b>\n📂 ${movie.messageIds.length} clips\n\nPlease wait... ⏱️`,
+                { parse_mode: 'HTML' }
+            );
+            autoDelete(ctx.api, ctx.chat.id, waitMsg.message_id);
+            await deliverMovie(ctx, bot, movie, waitMsg.message_id);
+        }
+    });
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Core Delivery — Force Sub check happens HERE (after monetization)
+// ────────────────────────────────────────────────────────────────────
+async function deliverMovie(ctx, bot, movie, waitMsgId) {
+    const { Room } = require('../database');
+    const { sendToLogChannel } = require('../utils/helpers');
+    const { getSetting } = require('../utils/monetization');
+
+    try {
+        // ── Force Subscribe Check ────────────────────────────────────
+        const isMember = await checkForceSub(ctx);
+        if (!isMember) {
+            const forceSubChannel = await getSetting('forceSubChannel', null);
+            let joinUrl = forceSubChannel;
+            // If it's a username, make an invite link
+            if (forceSubChannel && !forceSubChannel.startsWith('http')) {
+                try {
+                    const chatInfo = await ctx.api.getChat(forceSubChannel);
+                    joinUrl = chatInfo.invite_link || `https://t.me/${forceSubChannel.replace('@', '')}`;
+                } catch (_) {
+                    joinUrl = `https://t.me/${forceSubChannel.replace('@', '')}`;
+                }
+            }
+
+            await ctx.api.editMessageText(
+                ctx.chat.id, waitMsgId,
+                `📢 <b>One Last Step!</b>\n\n` +
+                `To receive your clips, you need to be a member of our main channel.\n\n` +
+                `<b>Why?</b> It keeps our community together and helps us keep this service free! 🙏\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `1️⃣ Join the channel below\n` +
+                `2️⃣ Come back and search again — clips will be delivered instantly!`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '📢 Join Channel  →', url: joinUrl }]]
+                    }
+                }
+            );
+            await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: \`${ctx.from.id}\` (@${ctx.from.username || 'N/A'})\nMovie: _${movie.title}_`);
+            return;
+        }
+
+        // ── Assign Room ──────────────────────────────────────────────
+        let room = await Room.findOneAndUpdate(
+            { isBusy: false },
+            { isBusy: true },
+            { returnDocument: 'after' }
+        );
+
+        if (!room) {
+            room = await Room.findOneAndUpdate(
+                {},
+                { isBusy: true },
+                { sort: { lastUsed: 1 }, returnDocument: 'after' }
+            );
+        }
+
+        if (!room) {
+            const totalRooms = await Room.countDocuments();
+            const msg = totalRooms === 0
+                ? '❌ The delivery system is not ready yet. Please notify the admin.'
+                : '❌ All delivery rooms are busy right now. Please try again in a moment.';
+            if (totalRooms === 0) {
+                await sendToLogChannel(bot, `🔴 *System Uninitialized* — User \`${ctx.from.id}\` tried delivery but 0 rooms exist.`);
+            } else {
+                await sendToLogChannel(bot, `🔴 *Room Exhaustion* — User \`${ctx.from.id}\` requested _${movie.title}_.`);
+            }
+            return ctx.api.editMessageText(ctx.chat.id, waitMsgId, msg);
+        }
+
+        // ── Clean Room ──
+        if (room.currentUserId) {
+            try {
+                await ctx.api.banChatMember(room.roomId, room.currentUserId);
+                await sleep(500);
+                await ctx.api.unbanChatMember(room.roomId, room.currentUserId);
+                await sleep(300);
+            } catch (e) {
+                if (!e.message.includes('can\'t remove chat owner') && !e.message.includes('not enough rights')) {
+                    console.error(`Kick failed for ${room.currentUserId}:`, e.message);
+                }
+            }
+        }
+
+        if (room.lastMessageIds?.length > 0) {
+            for (let i = 0; i < room.lastMessageIds.length; i += 100) {
+                try {
+                    await ctx.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
+                    await sleep(300);
+                } catch (_) { }
+            }
+        }
+
+        // ── Send Clips as Albums (batches of 10) ──────────────────────
+        let newMessageIds = [];
+
+        await ctx.api.editMessageText(
+            ctx.chat.id, waitMsgId,
+            `📤 <b>Delivering clips...</b>\n\n🎬 <i>${movie.title}</i>\n📂 ${movie.files?.length || movie.messageIds.length} clips\n\n<i>Please don't close this chat.</i>`,
+            { parse_mode: 'HTML' }
+        );
+
+        const files = movie.files && movie.files.length > 0 ? movie.files : null;
+
+        if (files) {
+            // ── New path: sendMediaGroup in albums of 10 ──
+            for (let i = 0; i < files.length; i += 10) {
+                const chunk = files.slice(i, i + 10);
+                const mediaGroup = chunk.map((f, idx) => {
+                    const base = { type: f.fileType, media: f.fileId };
+                    if (idx === 0 && f.caption) base.caption = f.caption; // Only first item gets caption in album
+                    return base;
+                });
+
+                try {
+                    const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
+                    if (Array.isArray(sent)) {
+                        newMessageIds.push(...sent.map(m => m.message_id));
+                    }
+                    await sleep(1200); // wait between album batches
+                } catch (e) {
+                    console.error(`sendMediaGroup failed (offset ${i}):`, e.message);
+                    // Fallback: send one by one from the chunk
+                    for (const f of chunk) {
+                        try {
+                            let msg;
+                            if (f.fileType === 'video') msg = await ctx.api.sendVideo(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            else if (f.fileType === 'photo') msg = await ctx.api.sendPhoto(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            else if (f.fileType === 'document') msg = await ctx.api.sendDocument(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            else if (f.fileType === 'audio') msg = await ctx.api.sendAudio(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            if (msg) newMessageIds.push(msg.message_id);
+                            await sleep(500);
+                        } catch (_) { }
+                    }
+                }
+            }
+        } else {
+            // ── Legacy path: copyMessages using stored messageIds ──
+            const dbChannel = process.env.DB_CHANNEL_ID;
+            for (let i = 0; i < movie.messageIds.length; i += 10) {
+                const chunk = movie.messageIds.slice(i, i + 10);
+                try {
+                    const copied = await ctx.api.copyMessages(room.roomId, dbChannel, chunk);
+                    if (Array.isArray(copied)) newMessageIds.push(...copied.map(c => c.message_id));
+                    await sleep(1200);
+                } catch (e) {
+                    for (const msgId of chunk) {
+                        try {
+                            const c = await ctx.api.copyMessage(room.roomId, dbChannel, msgId);
+                            newMessageIds.push(c.message_id);
+                            await sleep(400);
+                        } catch (_) { }
+                    }
+                }
+            }
+        }
+
+        // ── Create Invite Link (2hr, 1 member) ──────────────────────
+        const expireDate = Math.floor(Date.now() / 1000) + 2 * 60 * 60;
+        const invite = await ctx.api.createChatInviteLink(room.roomId, {
+            member_limit: 1,
+            expire_date: expireDate,
+            name: `Delivery: ${movie.title.substring(0, 20)}`
+        });
+
+        // ── Save Room State ──────────────────────────────────────────
+        room.currentUserId = ctx.from.id.toString();
+        room.lastMessageIds = newMessageIds;
+        room.lastUsed = new Date();
+        room.isBusy = false;
+        await room.save();
+
+        // ── Send Delivery Card ───────────────────────────────────────
+        await ctx.api.editMessageText(
+            ctx.chat.id, waitMsgId,
+            `✅ <b>FILES DISPATCHED!</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎬 <b>Movie:</b> ${movie.title}\n` +
+            `📂 <b>Payload:</b> ${movie.messageIds.length} Clips\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `⚠️ <b>Security Notice:</b>\n` +
+            `• Access link expires in <b>2 hours</b>\n` +
+            `• Single-use entry only\n\n` +
+            `<i>Tap below to enter your private delivery room! 👇</i>`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🚪 Enter Delivery Room  →', url: invite.invite_link }]]
+                }
+            }
+        );
+
+        // Auto-delete delivery message after 10 minutes
+        setTimeout(async () => {
+            try { await ctx.api.deleteMessage(ctx.chat.id, waitMsgId); } catch (_) { }
+        }, 10 * 60 * 1000);
+
+        // Track delivery stats
+        global.todayStats.deliveries++;
+        
+        // Update user download count and check badge
+        try {
+            const user = await User.findOneAndUpdate(
+                { userId: ctx.from.id },
+                { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } },
+                { upsert: true, new: true }
+            );
+            
+            // Check if user earned a new badge (video editing themed)
+            let newBadge = null;
+            if (user.downloadCount >= 3 && !user.badges.includes('✂️ Pro Cutter')) {
+                newBadge = '✂️ Pro Cutter';
+                user.badges.push(newBadge);
+                await user.save();
+            } else if (user.downloadCount >= 10 && !user.badges.includes('💎 Diamond Editor')) {
+                newBadge = '💎 Diamond Editor';
+                user.badges.push(newBadge);
+                await user.save();
+            } else if (user.downloadCount >= 20 && !user.badges.includes('👑 Editor King 👑')) {
+                newBadge = '👑 Editor King 👑';
+                user.badges.push(newBadge);
+                await user.save();
+            }
+            
+            // Notify user of new badge
+            if (newBadge) {
+                try {
+                    await ctx.api.sendMessage(
+                        ctx.from.id,
+                        `🎉 <b>Congratulations!</b>\n\nYou earned a new badge: <b>${newBadge}</b>\n\nKeep using the bot to unlock more!`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (_) {}
+            }
+        } catch (e) {
+            console.error('User badge error:', e);
+        }
+
+        await sendToLogChannel(bot, `✅ <b>DELIVERY SUCCESS</b>\nUser: <code>${ctx.from.id}</code> (@${ctx.from.username || 'N/A'})\nMovie: <i>${movie.title}</i>\nRoom: <code>${room.roomId}</code>\nClips: ${newMessageIds.length}\n\n#delivery 🚪`);
+
+    } catch (error) {
+        console.error('deliverMovie Error:', error);
+        await sendToLogChannel(bot, `❌ *Delivery Error*\nUser: \`${ctx.from?.id}\`\nError: _${error.message}_`);
+        try {
+            await ctx.api.editMessageText(ctx.chat.id, waitMsgId,
+                '❌ Something went wrong during delivery.\n\nPlease try again in a moment.'
+            );
+        } catch (_) { }
+    }
+}
