@@ -2,6 +2,12 @@ const { Movie, Room, User } = require('../database');
 const { decodeMovieLink, sleep, sendToLogChannel, encodeMovieLink } = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
 
+function getUserNameForLog(user) {
+    if (user.username) return `@${user.username}`;
+    if (user.first_name) return user.first_name + (user.last_name ? ` ${user.last_name}` : '');
+    return `User ${user.id}`;
+}
+
 // Auto-delete a bot message after N milliseconds
 const autoDelete = async (api, chatId, messageId, ms = 10 * 60 * 1000) => {
     await sleep(ms);
@@ -88,14 +94,14 @@ module.exports = (bot) => {
             const msg = await ctx.reply(
                 `🎫 <b>24-HOUR PASS ACTIVATED</b> 🎫\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
-                `✅ <b>Status:</b> Full Access Granted\n` +
-                `⏰ <b>Expires:</b> Today at ${expireStr}\n` +
+                `✅ <b>Status:</b> You're in!\n` +
+                `⏰ <b>Valid until:</b> Today at ${expireStr}\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `<i>You can now receive unlimited clips instantly from the group. Happy viewing! 🎬</i>`,
+                `<i>You can now get clips from the group. Enjoy! 🎬</i>`,
                 { parse_mode: 'HTML' }
             );
             autoDelete(ctx.api, ctx.chat.id, msg.message_id);
-            await sendToLogChannel(bot, `🎫 *Token Granted*\nUser: \`${userId}\` (@${ctx.from.username || 'N/A'})`);
+            await sendToLogChannel(bot, `🎫 *Token Granted*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)`);
             return;
         }
 
@@ -126,15 +132,15 @@ module.exports = (bot) => {
                 const wrappedUrl = await wrapShortlink(tokenStartUrl);
 
                 const msg = await ctx.reply(
-                    `🔐 <b>VERIFY TO GET CLIPS</b>\n` +
+                    `🎫 <b>GET PASS TO WATCH</b>\n` +
                     `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `You need <b>Pass</b> to get clips! 🎫\n\n` +
+                    `You need a <b>Pass</b> to get clips! 🎫\n\n` +
                     `📝 <b>Easy Steps:</b>\n` +
                     `1️⃣ Click button below\n` +
-                    `2️⃣ Complete simple verification\n` +
+                    `2️⃣ Get your pass (free)\n` +
                     `3️⃣ Come back here!\n\n` +
-                    `Verification takes only 30 seconds! ⏱️\n\n` +
-                    `❤️ Support us by verifying!`,
+                    `Takes only 30 seconds! ⏱️\n\n` +
+                    `❤️ Support us by getting pass!`,
                     {
                         parse_mode: 'HTML',
                         reply_markup: {
@@ -143,13 +149,13 @@ module.exports = (bot) => {
                     }
                 );
                 autoDelete(ctx.api, ctx.chat.id, msg.message_id);
-                await sendToLogChannel(bot, `🔒 *Token Required*\nUser: \`${ctx.from.id}\`\nMovie: _${movie.title}_`);
+                await sendToLogChannel(bot, `🔒 *Token Required*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
                 return;
             }
 
             const timeLeft = await getTokenExpiry(ctx.from.id);
             const waitMsg = await ctx.reply(
-                `🎫 <b>Pass Valid</b> — ${timeLeft} remaining\n\n⏳ Fetching your clips, please wait...`,
+                `🎫 <b>Pass Active</b> — ${timeLeft} left\n\n⏳ Getting your clips...`,
                 { parse_mode: 'HTML' }
             );
             autoDelete(ctx.api, ctx.chat.id, waitMsg.message_id);
@@ -181,7 +187,7 @@ module.exports = (bot) => {
                 }
             );
             autoDelete(ctx.api, ctx.chat.id, wrapMsg.message_id);
-            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: <code>${ctx.from.id}</code> (@${ctx.from.username || 'N/A'})\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
+            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
             return;
 
         } else {
@@ -235,7 +241,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                     }
                 }
             );
-            await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: \`${ctx.from.id}\` (@${ctx.from.username || 'N/A'})\nMovie: _${movie.title}_`);
+            await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
             return;
         }
 
@@ -370,24 +376,24 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         await room.save();
 
         // ── Send Delivery Card ───────────────────────────────────────
-        await ctx.api.editMessageText(
-            ctx.chat.id, waitMsgId,
-            `✅ <b>FILES DISPATCHED!</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `🎬 <b>Movie:</b> ${movie.title}\n` +
-            `📂 <b>Payload:</b> ${movie.messageIds.length} Clips\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `⚠️ <b>Security Notice:</b>\n` +
-            `• Access link expires in <b>2 hours</b>\n` +
-            `• Single-use entry only\n\n` +
-            `<i>Tap below to enter your private delivery room! 👇</i>`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[{ text: '🚪 Enter Delivery Room  →', url: invite.invite_link }]]
+            await ctx.api.editMessageText(
+                ctx.chat.id, waitMsgId,
+                `✅ <b>FILES READY!</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `🎬 <b>Movie:</b> ${movie.title}\n` +
+                `📂 <b>Clips:</b> ${movie.messageIds.length}\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `⚠️ <b>Note:</b>\n` +
+                `• Link works for <b>2 hours</b>\n` +
+                `• One time use only\n\n` +
+                `<i>Tap below to get your clips! 👇</i>`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '🚪 Get My Clips  →', url: invite.invite_link }]]
+                    }
                 }
-            }
-        );
+            );
 
         // Auto-delete delivery message after 10 minutes
         setTimeout(async () => {
@@ -402,7 +408,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             const user = await User.findOneAndUpdate(
                 { userId: ctx.from.id },
                 { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } },
-                { upsert: true, new: true }
+                { upsert: true, returnDocument: 'after' }
             );
             
             // Check if user earned a new badge (video editing themed)
@@ -435,11 +441,11 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             console.error('User badge error:', e);
         }
 
-        await sendToLogChannel(bot, `✅ <b>DELIVERY SUCCESS</b>\nUser: <code>${ctx.from.id}</code> (@${ctx.from.username || 'N/A'})\nMovie: <i>${movie.title}</i>\nRoom: <code>${room.roomId}</code>\nClips: ${newMessageIds.length}\n\n#delivery 🚪`);
+        await sendToLogChannel(bot, `✅ <b>DELIVERY SUCCESS</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\nRoom: <code>${room.roomId}</code>\nClips: ${newMessageIds.length}\n\n#delivery 🚪`);
 
     } catch (error) {
         console.error('deliverMovie Error:', error);
-        await sendToLogChannel(bot, `❌ *Delivery Error*\nUser: \`${ctx.from?.id}\`\nError: _${error.message}_`);
+        await sendToLogChannel(bot, `❌ *Delivery Error*\nUser: ${ctx.from ? getUserNameForLog(ctx.from) : 'Unknown'} (\`${ctx.from?.id || 'N/A'}\`)\nError: _${error.message}_`);
         try {
             await ctx.api.editMessageText(ctx.chat.id, waitMsgId,
                 '❌ Something went wrong during delivery.\n\nPlease try again in a moment.'

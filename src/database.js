@@ -24,11 +24,12 @@ const connectDB = async () => {
 // Movie Schema
 const movieSchema = new mongoose.Schema({
     title: { type: String, required: true, index: true },
-    categories: { type: [String], default: [], index: true }, // hero, heroine, director, etc.
-    messageIds: { type: [Number], default: [] }, // kept for backward compat
+    categories: { type: [String], default: [], index: true },
+    messageIds: { type: [Number], default: [] },
+    thumbnail: { type: String, default: null },
     files: [{
         fileId: { type: String, required: true },
-        fileType: { type: String, required: true }, // 'video' | 'photo' | 'document' | 'audio'
+        fileType: { type: String, required: true },
         caption: { type: String, default: '' }
     }],
     requests: { type: Number, default: 0 },

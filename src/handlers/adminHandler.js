@@ -20,7 +20,7 @@ const isAdmin = (ctx) => {
 
 // List of admin-only commands to hide from normal users
 const adminCommands = [
-    'addmovie', 'deletemovie', 'addcategory', 'stats', 'filters', 'top',
+    'addmovie', 'deletemovie', 'addcategory', 'stats', 'top',
     'addroom', 'rooms', 'cleanroom', 'broadcast', 'maintenance',
     'logs', 'restartrooms', 'settings', 'setmode', 'setshortlink',
     'setapikey', 'setforcesub', 'unsetforcesub'
@@ -67,25 +67,56 @@ module.exports = (bot) => {
                 `• <code>/filters</code> - See all movies (in group)\n` +
                 `• <code>/myprofile</code> - Your stats & badges\n\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `❓ <b>NEED HELP?</b>\n` +
-                `Contact admin if you face any problem!`,
+                `💡 <b>TIPS:</b>\n` +
+                `• Don't worry about spelling!\n` +
+                `• I fix typos automatically\n` +
+                `• Spaces don't matter\n` +
+                `• Use /filters to browse all movies\n\n` +
+                `❓ Need help? Contact admin!`,
                 { parse_mode: 'HTML' }
             );
         } else {
             await ctx.reply(
-                `📖 <b>GROUP HELP</b>\n\n` +
+                `📖 <b>HOW TO USE THIS BOT</b>\n\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🎬 <b>HOW TO USE:</b>\n\n` +
-                `✅ Just type any movie name!\n` +
-                `Example: <code>Leo</code> or <code>Jawan</code>\n\n` +
-                `💡 <b>OTHER COMMANDS:</b>\n\n` +
-                `• <code>filters</code> or <code>/filters</code> - See all movies\n` +
-                `• <code>list</code> - See movies list\n` +
-                `• <code>clips</code> - See all clips\n\n` +
-                `👆 Tap any movie from list to get clips!`,
+                `🎬 <b>GET CLIPS:</b>\n\n` +
+                `1️⃣ Just type a movie name!\n` +
+                `2️⃣ I'll send you a button\n` +
+                `3️⃣ Click the button\n` +
+                `4️⃣ Get clips in your PM!\n\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `💡 <b>EXAMPLES:</b>\n` +
+                `<code>Leo</code> • <code>Jawan</code> • <code>Pathaan</code>\n\n` +
+                `💡 <b>OTHER COMMANDS:</b>\n` +
+                `• <code>/filters</code> - Browse all movies\n` +
+                `• <code>/help</code> - Full help guide\n` +
+                `• <code>/myprofile</code> - Your stats\n\n` +
+                `💡 <b>TIPS:</b>\n` +
+                `• Don't worry about spelling!\n` +
+                `• I fix typos automatically\n` +
+                `• Spaces don't matter\n\n` +
+                `❓ Need help? Type /help`,
                 { parse_mode: 'HTML' }
             );
         }
+    });
+
+    // Public /todaystats - shows today's activity in group
+    bot.command('todaystats', async (ctx) => {
+        const todaySearches = global.todayStats?.searches || 0;
+        const todayDeliveries = global.todayStats?.deliveries || 0;
+        const successRate = todaySearches > 0 ? Math.round((todayDeliveries / todaySearches) * 100) : 0;
+
+        await ctx.reply(
+            `📊 <b>TODAY'S ACTIVITY</b>\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🔍 <b>Searches:</b> ${todaySearches}\n` +
+            `📤 <b>Clips Delivered:</b> ${todayDeliveries}\n` +
+            `✅ <b>Success Rate:</b> ${successRate}%\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `💡 <b>Tip:</b> Type a movie name to get clips!`,
+            { parse_mode: 'HTML' }
+        );
     });
 
     // User profile with badges
@@ -229,56 +260,205 @@ module.exports = (bot) => {
         const totalMovies = await Movie.countDocuments();
         const totalUsers = await User.countDocuments();
         
+        // Calculate total clips
+        const moviesWithClips = await Movie.find({}, { messageIds: 1, files: 1 });
+        const totalClips = moviesWithClips.reduce((sum, m) => sum + (m.files?.length || m.messageIds?.length || 0), 0);
+        
         // Growth Analytics
         const now = new Date();
         const last24h = new Date(now - 24 * 60 * 60 * 1000);
         const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
+        const last30d = new Date(now - 30 * 24 * 60 * 60 * 1000);
         
         const usersLast24h = await User.countDocuments({ joinedAt: { $gte: last24h } });
         const usersLast7d = await User.countDocuments({ joinedAt: { $gte: last7d } });
+        const usersLast30d = await User.countDocuments({ joinedAt: { $gte: last30d } });
+        
+        // Calculate active users (users who searched or downloaded)
+        const activeUsers = await User.countDocuments({
+            $or: [{ searchCount: { $gt: 0 } }, { downloadCount: { $gt: 0 } }]
+        });
+        
+        // Top searched movies
+        const topMovies = await Movie.find().sort({ requests: -1 }).limit(5);
+        
+        // Top active users
+        const topUsers = await User.find().sort({ downloadCount: -1 }).limit(5);
+        
+        // Room status
+        const rooms = await Room.find();
+        const freeRooms = rooms.filter(r => !r.isBusy).length;
+        const busyRooms = rooms.filter(r => r.isBusy).length;
+        
+        // Today's stats
+        const todayStr = new Date().toDateString();
+        const todaySearches = global.todayStats?.searches || 0;
+        const todayDeliveries = global.todayStats?.deliveries || 0;
         
         const churnRate = global.broadcastStats.total > 0 
             ? Math.round((global.broadcastStats.blocked / global.broadcastStats.total) * 100) 
             : 0;
         
-        const keyboard = new InlineKeyboard().text('🔄 Refresh', 'stats_refresh');
+        const keyboard = new InlineKeyboard()
+            .text('🔄 Refresh', 'stats_refresh');
 
-        ctx.reply(
-            `📊 <b>SYSTEM STATISTICS</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `🎬 <b>Total Movies:</b> ${totalMovies}\n` +
-            `👤 <b>Total Users:</b> ${totalUsers}\n\n` +
-            `📈 <b>Growth Analytics</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `🕐 <b>New Users (24h):</b> ${usersLast24h}\n` +
-            `📅 <b>New Users (7d):</b> ${usersLast7d}\n` +
-            `📉 <b>Churn Rate:</b> ${churnRate}%\n\n` +
-            `📂 <i>Type /filters to see all movies.</i>`,
-            { parse_mode: 'HTML', reply_markup: keyboard }
-        );
+        let statsText = `📊 <b>ADMIN DASHBOARD</b>\n`;
+        statsText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        statsText += `🎬 <b>MOVIES & CLIPS</b>\n`;
+        statsText += `━━━━━━━━━━━━━━━━━━━━\n`;
+        statsText += `📂 Total Movies: <b>${totalMovies}</b>\n`;
+        statsText += `📹 Total Clips: <b>${totalClips}</b>\n`;
+        statsText += `📊 Avg Clips/Movie: <b>${totalMovies > 0 ? Math.round(totalClips/totalMovies) : 0}</b>\n\n`;
+        
+        statsText += `👥 <b>USERS</b>\n`;
+        statsText += `━━━━━━━━━━━━━━━━━━━━\n`;
+        statsText += `👤 Total Users: <b>${totalUsers}</b>\n`;
+        statsText += `✅ Active Users: <b>${activeUsers}</b>\n`;
+        statsText += `🆕 New (24h): <b>${usersLast24h}</b>\n`;
+        statsText += `🆕 New (7d): <b>${usersLast7d}</b>\n`;
+        statsText += `🆕 New (30d): <b>${usersLast30d}</b>\n\n`;
+        
+        statsText += `📈 <b>TODAY'S ACTIVITY</b>\n`;
+        statsText += `━━━━━━━━━━━━━━━━━━━━\n`;
+        statsText += `🔍 Searches: <b>${todaySearches}</b>\n`;
+        statsText += `📤 Deliveries: <b>${todayDeliveries}</b>\n`;
+        statsText += `📊 Success Rate: <b>${todaySearches > 0 ? Math.round((todayDeliveries/todaySearches)*100) : 0}%</b>\n\n`;
+        
+        statsText += `🏠 <b>ROOMS</b>\n`;
+        statsText += `━━━━━━━━━━━━━━━━━━━━\n`;
+        statsText += `🟢 Free: <b>${freeRooms}</b>\n`;
+        statsText += `🔴 Busy: <b>${busyRooms}</b>\n`;
+        statsText += `📊 Total: <b>${rooms.length}</b>\n\n`;
+        
+        if (topMovies.length > 0) {
+            statsText += `🔥 <b>TOP SEARCHED</b>\n`;
+            statsText += `━━━━━━━━━━━━━━━━━━━━\n`;
+            topMovies.forEach((m, i) => {
+                statsText += `${i+1}. ${m.title} (${m.requests})\n`;
+            });
+            statsText += `\n`;
+        }
+        
+        if (topUsers.length > 0) {
+            statsText += `⭐ <b>TOP DOWNLOADERS</b>\n`;
+            statsText += `━━━━━━━━━━━━━━━━━━━━\n`;
+            topUsers.forEach((u, i) => {
+                statsText += `${i+1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
+            });
+        }
+
+        ctx.reply(statsText, { parse_mode: 'HTML', reply_markup: keyboard });
     });
 
     bot.command('filters', async (ctx) => {
-        const movies = await Movie.find().sort({ title: 1 });
-        if (movies.length === 0) return ctx.reply('📭 No movie filters found.');
+        const movies = await Movie.find();
+        if (movies.length === 0) return ctx.reply('📭 No movies in database yet!');
 
-        let text = '📂 <b>DATABASE FILTERS</b>\n━━━━━━━━━━━━━━━━━━━━\n';
-        movies.forEach((m, i) => {
-            const count = m.files?.length || m.messageIds.length;
-            text += `🔹 ${i + 1}. <b>${m.title}</b> (<code>${count} clips</code>)\n`;
-        });
-
-        const footer = `\n━━━━━━━━━━━━━━━━━━━━\n✨ Total Filters: <b>${movies.length}</b>`;
-        text += footer;
-
-        if (text.length > 4000) {
-            const chunks = text.match(/[\s\S]{1,4000}/g);
-            for (const chunk of chunks) {
-                await ctx.reply(chunk, { parse_mode: 'HTML' });
+        const shuffled = movies.sort(() => Math.random() - 0.5);
+        
+        const { InlineKeyboard } = require('grammy');
+        const ITEMS_PER_PAGE = 10;
+        const page = 0;
+        
+        const buildKeyboard = (movieList, currentPage) => {
+            const keyboard = new InlineKeyboard();
+            const start = currentPage * ITEMS_PER_PAGE;
+            const end = start + ITEMS_PER_PAGE;
+            const pageItems = movieList.slice(start, end);
+            
+            pageItems.forEach(m => {
+                keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row();
+            });
+            
+            const totalPages = Math.ceil(movieList.length / ITEMS_PER_PAGE);
+            if (totalPages > 1) {
+                const buttons = [];
+                if (currentPage > 0) {
+                    buttons.push({ text: '⬅️ Previous', callback_data: `fp_${currentPage - 1}` });
+                }
+                if (currentPage < totalPages - 1) {
+                    buttons.push({ text: 'Next ➡️', callback_data: `fp_${currentPage + 1}` });
+                }
+                if (buttons.length > 0) {
+                    keyboard.row(...buttons);
+                }
             }
-        } else {
-            ctx.reply(text, { parse_mode: 'HTML' });
-        }
+            return keyboard;
+        };
+
+        const keyboard = buildKeyboard(shuffled, page);
+        
+        const helpText = `📂 <b>ALL MOVIES LIST</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👆 Tap any movie to get clips!\n\n` +
+            `💡 <b>Simple Guide:</b>\n` +
+            `1️⃣ Click movie name below\n` +
+            `2️⃣ I will send button to your PM\n` +
+            `3️⃣ Click that to get all clips!\n\n` +
+            `📊 Page: <b>1</b> / <b>${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}</b>\n` +
+            `✨ Total: <b>${movies.length}</b> movies`;
+
+        await ctx.reply(helpText, { 
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+            reply_parameters: { message_id: ctx.message.message_id }
+        });
+    });
+
+    // Non-admin /filter command - shows interactive filter list
+    bot.command('filter', async (ctx) => {
+        const movies = await Movie.find();
+        if (movies.length === 0) return ctx.reply('📭 No movies in database yet!');
+
+        const shuffled = movies.sort(() => Math.random() - 0.5);
+        
+        const { InlineKeyboard } = require('grammy');
+        const ITEMS_PER_PAGE = 10;
+        const page = 0;
+        
+        const buildKeyboard = (movieList, currentPage) => {
+            const keyboard = new InlineKeyboard();
+            const start = currentPage * ITEMS_PER_PAGE;
+            const end = start + ITEMS_PER_PAGE;
+            const pageItems = movieList.slice(start, end);
+            
+            pageItems.forEach(m => {
+                keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row();
+            });
+            
+            const totalPages = Math.ceil(movieList.length / ITEMS_PER_PAGE);
+            if (totalPages > 1) {
+                const buttons = [];
+                if (currentPage > 0) {
+                    buttons.push({ text: '⬅️ Previous', callback_data: `fp_${currentPage - 1}` });
+                }
+                if (currentPage < totalPages - 1) {
+                    buttons.push({ text: 'Next ➡️', callback_data: `fp_${currentPage + 1}` });
+                }
+                if (buttons.length > 0) {
+                    keyboard.row(...buttons);
+                }
+            }
+            return keyboard;
+        };
+
+        const keyboard = buildKeyboard(shuffled, page);
+
+        const helpText = `📂 <b>ALL MOVIES LIST</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `👆 Tap any movie to get clips!\n\n` +
+            `💡 <b>Simple Guide:</b>\n` +
+            `1️⃣ Click movie name below\n` +
+            `2️⃣ I will send button to your PM\n` +
+            `3️⃣ Click that to get all clips!\n\n` +
+            `📊 Page: <b>1</b> / <b>${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}</b>\n` +
+            `✨ Total: <b>${movies.length}</b> movies`;
+
+        await ctx.reply(helpText, { 
+            parse_mode: 'HTML',
+            reply_markup: keyboard
+        });
     });
 
     bot.command('top', async (ctx) => {
@@ -501,7 +681,7 @@ module.exports = (bot) => {
             return ctx.reply('❌ Invalid mode. Use: /setmode off | shortlink | token');
         }
         await setSetting('mode', newMode);
-        const labels = { off: '🟢 Free Access', shortlink: '🔗 Shortlink Mode', token: '🎫 Token Mode' };
+        const labels = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 Token' };
         ctx.reply(`✅ Monetization mode changed to: <b>${labels[newMode]}</b>`, { parse_mode: 'HTML' });
     });
 

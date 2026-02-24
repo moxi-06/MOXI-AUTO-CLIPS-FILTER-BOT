@@ -156,7 +156,7 @@ module.exports = (bot) => {
         const endMsg = parseMessageLink(endLink);
 
         if (!startMsg || !endMsg) {
-            return ctx.reply(`❌ Invalid message links! Please use format:\nhttps://t.me/channel/123`, { parse_mode: 'HTML' });
+            return ctx.reply(`❌ Wrong link format! Use:\nhttps://t.me/channel/123`, { parse_mode: 'HTML' });
         }
 
         // Get messages from the channel and add them
@@ -173,10 +173,37 @@ module.exports = (bot) => {
                     chatId = '-100' + channelId;
                 }
 
+                let foundThumbnail = null;
+
                 for (let msgId = startMsg.messageId; msgId <= endMsg.messageId; msgId++) {
                     try {
-                        const msg = await ctx.api.getMessages(chatId, msgId);
+                        const msgs = await ctx.api.getMessages(chatId, [msgId]);
+                        const msg = Array.isArray(msgs) ? msgs[0] : msgs;
+                        
+                        console.log('Msg ' + msgId + ': photo=' + !!msg.photo + ', video=' + !!msg.video + ', doc=' + !!msg.document + ', anim=' + !!msg.animation);
+                        
                         const fileInfo = extractFileInfo(msg);
+                        
+                        // Detect thumbnail from first media found
+                        if (!foundThumbnail) {
+                            if (msg.photo && msg.photo.length > 0) {
+                                // Use largest photo as thumbnail
+                                foundThumbnail = msg.photo[msg.photo.length - 1].file_id;
+                                console.log('Found photo thumbnail!');
+                            } else if (msg.video && msg.video.thumbnail) {
+                                // Use video thumbnail
+                                foundThumbnail = msg.video.thumbnail.file_id;
+                                console.log('Found video thumbnail!');
+                            } else if (msg.document && msg.document.thumbnail) {
+                                // Use document thumbnail
+                                foundThumbnail = msg.document.thumbnail.file_id;
+                                console.log('Found doc thumbnail!');
+                            } else if (msg.animation) {
+                                // Use animation/GIF
+                                foundThumbnail = msg.animation.file_id;
+                                console.log('Found animation!');
+                            }
+                        }
                         
                         if (fileInfo) {
                             // Extract categories from caption too
@@ -200,6 +227,18 @@ module.exports = (bot) => {
                     } catch (e) {
                         console.log(`Could not get message ${msgId}: ${e.message}`);
                     }
+                }
+
+                // Save thumbnail if found
+                if (foundThumbnail) {
+                    console.log('Saving thumbnail to MongoDB...');
+                    await Movie.updateOne(
+                        { title, $or: [{ thumbnail: { $exists: false } }, { thumbnail: null }] },
+                        { $set: { thumbnail: foundThumbnail } }
+                    );
+                    console.log('Thumbnail saved!');
+                } else {
+                    console.log('No thumbnail found in any message!');
                 }
 
                 ctx.reply(
