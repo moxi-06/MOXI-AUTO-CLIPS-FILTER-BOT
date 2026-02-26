@@ -1,5 +1,5 @@
 const { Movie } = require('../database');
-const { cleanMovieName } = require('../utils/helpers');
+const { cleanMovieName, sendToLogChannel } = require('../utils/helpers');
 
 // Admin check function
 const isAdmin = (ctx) => {
@@ -59,7 +59,7 @@ function parseMessageLink(link) {
     return null;
 }
 
-async function indexMessage(msg, msgId) {
+async function indexMessage(msg, msgId, bot) {
     if (!msg.forward_origin) return;
     const origin = msg.forward_origin;
     if (origin.type !== 'channel') return;
@@ -77,6 +77,8 @@ async function indexMessage(msg, msgId) {
     const categories = extractCategories(msg.caption || '');
 
     try {
+        const isNewMovie = !(await Movie.findOne({ title: movieName }));
+        
         const updateData = {
             $setOnInsert: { title: movieName, requests: 0 },
             $addToSet: {
@@ -96,7 +98,13 @@ async function indexMessage(msg, msgId) {
             { upsert: true, returnDocument: 'after' }
         );
         
-        if (categories.length > 0) {
+        if (isNewMovie) {
+            console.log(`📂 Added NEW movie: ${movieName}`);
+            await sendToLogChannel(bot, `📂 <b>New Movie Auto-Indexed</b>\n\n` +
+                `🎬 <b>${movieName}</b>\n` +
+                `📂 First clip added: ${fileInfo.fileType}\n` +
+                `${categories.length > 0 ? `👤 Categories: ${categories.join(', ')}` : ''}`);
+        } else if (categories.length > 0) {
             console.log(`📂 Added ${movieName} with categories: ${categories.join(', ')}`);
         }
     } catch (error) {
@@ -109,14 +117,14 @@ module.exports = (bot) => {
     bot.on('message', async (ctx, next) => {
         const dbChannelId = process.env.DB_CHANNEL_ID;
         if (!dbChannelId || ctx.chat.id.toString() !== dbChannelId) return next();
-        await indexMessage(ctx.message, ctx.message.message_id);
+        await indexMessage(ctx.message, ctx.message.message_id, bot);
     });
 
     // Also handle channel_post if the bot is a channel admin
     bot.on('channel_post', async (ctx, next) => {
         const dbChannelId = process.env.DB_CHANNEL_ID;
         if (!dbChannelId || ctx.chat.id.toString() !== dbChannelId) return next();
-        await indexMessage(ctx.channelPost, ctx.channelPost.message_id);
+        await indexMessage(ctx.channelPost, ctx.channelPost.message_id, bot);
     });
 
     // Admin command to add movies using message link range
@@ -163,6 +171,14 @@ module.exports = (bot) => {
         try {
             let addedCount = 0;
             
+            const totalMsgs = endMsg.messageId - startMsg.messageId + 1;
+            let progressMsg = await ctx.reply(
+                `🔄 <b>Indexing "${title}"...</b>\n\n` +
+                `📊 Progress: <b>0</b> / ${totalMsgs} messages\n` +
+                `⏳ Processing...`,
+                { parse_mode: 'HTML' }
+            );
+
             // If same channel, get messages in range
             if (startMsg.channel === endMsg.channel) {
                 const channelId = startMsg.channel;
@@ -224,6 +240,20 @@ module.exports = (bot) => {
                             );
                             addedCount++;
                         }
+
+                        // Update progress every 5 messages
+                        if ((msgId - startMsg.messageId + 1) % 5 === 0 || msgId === endMsg.messageId) {
+                            try {
+                                await ctx.api.editMessageText(
+                                    ctx.chat.id,
+                                    progressMsg.message_id,
+                                    `🔄 <b>Indexing "${title}"...</b>\n\n` +
+                                    `📊 Progress: <b>${msgId - startMsg.messageId + 1}</b> / ${totalMsgs} messages\n` +
+                                    `✅ Added: ${addedCount} files so far`,
+                                    { parse_mode: 'HTML' }
+                                );
+                            } catch (_) {}
+                        }
                     } catch (e) {
                         console.log(`Could not get message ${msgId}: ${e.message}`);
                     }
@@ -241,19 +271,194 @@ module.exports = (bot) => {
                     console.log('No thumbnail found in any message!');
                 }
 
-                ctx.reply(
-                    `✅ <b>Movie Added!</b>\n\n` +
+                await ctx.api.editMessageText(
+                    ctx.chat.id,
+                    progressMsg.message_id,
+                    `✅ <b>Indexing Complete!</b>\n\n` +
                     `🎬 <b>${title}</b>\n` +
                     `📂 Files added: ${addedCount}\n` +
-                    `${categories.length > 0 ? `👤 Categories: ${categories.join(', ')}` : ''}`,
+                    `${categories.length > 0 ? `👤 Categories: ${categories.join(', ')}` : ''}\n\n` +
+                    `🖼️ Thumbnail: ${foundThumbnail ? '✅ Saved' : '❌ Not found'}`,
                     { parse_mode: 'HTML' }
                 );
+
+                // Send to log channel
+                const logChannelId = process.env.LOG_CHANNEL_ID;
+                if (logChannelId) {
+                    try {
+                        await ctx.api.sendMessage(
+                            logChannelId,
+                            `📂 <b>Auto-Index Complete</b>\n\n` +
+                            `🎬 Movie: <b>${title}</b>\n` +
+                            `📂 Files: ${addedCount}\n` +
+                            `🖼️ Thumbnail: ${foundThumbnail ? '✅' : '❌'}\n` +
+                            `${categories.length > 0 ? `👤 Categories: ${categories.join(', ')}` : ''}`,
+                            { parse_mode: 'HTML' }
+                        );
+                    } catch (e) {
+                        console.log('Could not send to log channel:', e.message);
+                    }
+                }
             } else {
                 ctx.reply(`❌ Start and end links must be from same channel!`);
             }
         } catch (error) {
             console.error('Error adding movie:', error);
             ctx.reply(`❌ Error: ${error.message}`);
+        }
+    });
+
+    bot.command('thumb', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+
+        const args = ctx.match.trim();
+        if (!args) {
+            return ctx.reply(
+                `🖼️ Set Thumbnail\n` +
+                `━━━━ ✦ ━━━━\n\n` +
+                `Reply to a photo with:\n` +
+                `/thumb movie_name\n\n` +
+                `Type /thumb list to see movies`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        if (args.toLowerCase() === 'list') {
+            const movies = await Movie.find().select('title thumbnail').limit(20);
+            if (movies.length === 0) {
+                return ctx.reply(`No movies yet!`);
+            }
+            
+            let text = `🖼️ Movies:\n`;
+            text += `━━━━ ✦ ━━━━\n\n`;
+            movies.forEach((m, i) => {
+                text += `<code>${m.title}</code>${m.thumbnail ? ' ✓' : ''}\n`;
+            });
+            text += `\nReply to a photo and use:\n/thumb movie_name`;
+            
+            return ctx.reply(text, { parse_mode: 'HTML' });
+        }
+
+        if (!ctx.message.reply_to_message) {
+            return ctx.reply(
+                `Reply to a photo with:\n/thumb movie_name\n\n` +
+                `Type /thumb list to see movies`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        const replyMsg = ctx.message.reply_to_message;
+        
+        if (!replyMsg.photo || replyMsg.photo.length === 0) {
+            return ctx.reply(`Reply to a photo!`);
+        }
+
+        const movieName = cleanMovieName(args);
+        const photoFileId = replyMsg.photo[replyMsg.photo.length - 1].file_id;
+
+        try {
+            let movie = await Movie.findOne({ title: movieName });
+            
+            if (!movie) {
+                movie = await Movie.findOne({ title: { $regex: `^${movieName}$`, $options: 'i' } });
+            }
+            
+            if (!movie) {
+                movie = await Movie.findOne({ title: { $regex: movieName, $options: 'i' } });
+            }
+            
+            if (!movie) {
+                const movies = await Movie.find({ title: { $regex: movieName, $options: 'i' } }).limit(5);
+                if (movies.length > 0) {
+                    const list = movies.map(m => `<code>${m.title}</code>`).join('\n');
+                    return ctx.reply(
+                        `Not found: "${args}"\n\n` +
+                        `Maybe you meant:\n${list}`,
+                        { parse_mode: 'HTML' }
+                    );
+                }
+                return ctx.reply(
+                    `Not found: "${args}"\n\n` +
+                    `Type /thumb list to see movies`,
+                    { parse_mode: 'HTML' }
+                );
+            }
+
+            movie.thumbnail = photoFileId;
+            await movie.save();
+
+            await ctx.reply(
+                `✅ Done!\nMovie: ${movie.title}\nThumbnail saved`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (error) {
+            console.error('Error setting thumbnail:', error);
+            ctx.reply(`Error: ${error.message}`);
+        }
+    });
+
+    bot.command('delmovie', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+
+        const args = ctx.match.trim();
+        if (!args) {
+            return ctx.reply(
+                `🗑️ Delete Movie\n` +
+                `━━━━ ✦ ━━━━\n\n` +
+                `Usage:\n` +
+                `/delmovie movie_name\n\n` +
+                `Type /delmovie list to see all movies`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        if (args.toLowerCase() === 'list') {
+            const movies = await Movie.find().select('title').limit(20);
+            if (movies.length === 0) {
+                return ctx.reply(`No movies in database!`);
+            }
+            
+            let text = `🗑️ Movies in DB:\n`;
+            text += `━━━━ ✦ ━━━━\n\n`;
+            movies.forEach((m, i) => {
+                text += `<code>${m.title}</code>\n`;
+            });
+            text += `\nUse: /delmovie movie_name`;
+            
+            return ctx.reply(text, { parse_mode: 'HTML' });
+        }
+
+        const movieName = cleanMovieName(args);
+
+        try {
+            let movie = await Movie.findOne({ title: movieName });
+            
+            if (!movie) {
+                movie = await Movie.findOne({ title: { $regex: `^${movieName}$`, $options: 'i' } });
+            }
+            
+            if (!movie) {
+                movie = await Movie.findOne({ title: { $regex: movieName, $options: 'i' } });
+            }
+            
+            if (!movie) {
+                return ctx.reply(
+                    `Not found: "${args}"\n` +
+                    `Type /delmovie list to see all movies`,
+                    { parse_mode: 'HTML' }
+                );
+            }
+
+            const title = movie.title;
+            await movie.deleteOne();
+
+            await ctx.reply(
+                `✅ Deleted: ${title}`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (error) {
+            console.error('Error deleting movie:', error);
+            ctx.reply(`Error: ${error.message}`);
         }
     });
 };

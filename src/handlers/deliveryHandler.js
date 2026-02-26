@@ -148,7 +148,12 @@ module.exports = (bot) => {
                         }
                     }
                 );
-                autoDelete(ctx.api, ctx.chat.id, msg.message_id);
+                
+                // Auto-delete token required message after 10 minutes
+                setTimeout(async () => {
+                    try { await ctx.api.deleteMessage(ctx.chat.id, msg.message_id); } catch (_) { }
+                }, 10 * 60 * 1000);
+                
                 await sendToLogChannel(bot, `🔒 *Token Required*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
                 return;
             }
@@ -186,7 +191,12 @@ module.exports = (bot) => {
                     }
                 }
             );
-            autoDelete(ctx.api, ctx.chat.id, wrapMsg.message_id);
+            
+            // Auto-delete shortlink message after 10 minutes
+            setTimeout(async () => {
+                try { await ctx.api.deleteMessage(ctx.chat.id, wrapMsg.message_id); } catch (_) { }
+            }, 10 * 60 * 1000);
+            
             await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
             return;
 
@@ -395,7 +405,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 }
             );
 
-        // Auto-delete delivery message after 10 minutes
+        // Auto-delete delivery message after 10 minutes (keeps PM clean)
         setTimeout(async () => {
             try { await ctx.api.deleteMessage(ctx.chat.id, waitMsgId); } catch (_) { }
         }, 10 * 60 * 1000);
