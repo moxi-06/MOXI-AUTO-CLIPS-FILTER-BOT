@@ -15,15 +15,14 @@ module.exports = (bot) => {
         // Skip old events
         const eventDate = ctx.myChatMember.date * 1000;
         if (eventDate < global.botStartedAt) return;
-        
+
         const status = ctx.myChatMember.new_chat_member.status;
-        
+
         // User joined the group
         if (status === 'member' || status === 'administrator') {
             const user = ctx.myChatMember.new_chat_member.user;
-            
+
             try {
-                const groupUsername = process.env.GROUP_ID?.replace('-100', '');
                 const welcomeKeyboard = new (require('grammy')).InlineKeyboard()
                     .text('📖 Step-by-Step Guide', 'welcome_guide')
                     .text('🎬 See All Movies', 'welcome_movies').row()

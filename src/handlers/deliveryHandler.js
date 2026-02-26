@@ -62,7 +62,7 @@ module.exports = (bot) => {
                 `━━━━━━━━━━━━━━━━━━━━\n` +
                 `🎬 <b>HOW TO USE:</b>\n\n` +
                 `1️⃣ Go to our group\n` +
-                `   👉 <a href="https://t.me/${process.env.GROUP_ID?.replace('-100', '')}">Click Here</a>\n\n` +
+                `   👉 ${process.env.GROUP_LINK ? `<a href="${process.env.GROUP_LINK}">Click Here</a>` : '<b>Search in our group</b>'}\n\n` +
                 `2️⃣ Type any movie name\n` +
                 `   Example: <code>Leo</code> or <code>Jawan</code>\n\n` +
                 `3️⃣ Click the button I send\n` +
@@ -148,12 +148,12 @@ module.exports = (bot) => {
                         }
                     }
                 );
-                
+
                 // Auto-delete token required message after 10 minutes
                 setTimeout(async () => {
                     try { await ctx.api.deleteMessage(ctx.chat.id, msg.message_id); } catch (_) { }
                 }, 10 * 60 * 1000);
-                
+
                 await sendToLogChannel(bot, `🔒 *Token Required*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
                 return;
             }
@@ -191,12 +191,12 @@ module.exports = (bot) => {
                     }
                 }
             );
-            
+
             // Auto-delete shortlink message after 10 minutes
             setTimeout(async () => {
                 try { await ctx.api.deleteMessage(ctx.chat.id, wrapMsg.message_id); } catch (_) { }
             }, 10 * 60 * 1000);
-            
+
             await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
             return;
 
@@ -386,24 +386,24 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         await room.save();
 
         // ── Send Delivery Card ───────────────────────────────────────
-            await ctx.api.editMessageText(
-                ctx.chat.id, waitMsgId,
-                `✅ <b>FILES READY!</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `🎬 <b>Movie:</b> ${movie.title}\n` +
-                `📂 <b>Clips:</b> ${movie.messageIds.length}\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `⚠️ <b>Note:</b>\n` +
-                `• Link works for <b>2 hours</b>\n` +
-                `• One time use only\n\n` +
-                `<i>Tap below to get your clips! 👇</i>`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '🚪 Get My Clips  →', url: invite.invite_link }]]
-                    }
+        await ctx.api.editMessageText(
+            ctx.chat.id, waitMsgId,
+            `✅ <b>FILES READY!</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `🎬 <b>Movie:</b> ${movie.title}\n` +
+            `📂 <b>Clips:</b> ${movie.messageIds.length}\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `⚠️ <b>Note:</b>\n` +
+            `• Link works for <b>2 hours</b>\n` +
+            `• One time use only\n\n` +
+            `<i>Tap below to get your clips! 👇</i>`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🚪 Get My Clips  →', url: invite.invite_link }]]
                 }
-            );
+            }
+        );
 
         // Auto-delete delivery message after 10 minutes (keeps PM clean)
         setTimeout(async () => {
@@ -412,7 +412,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
 
         // Track delivery stats
         global.todayStats.deliveries++;
-        
+
         // Update user download count and check badge
         try {
             const user = await User.findOneAndUpdate(
@@ -420,7 +420,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } },
                 { upsert: true, returnDocument: 'after' }
             );
-            
+
             // Check if user earned a new badge (video editing themed)
             let newBadge = null;
             if (user.downloadCount >= 3 && !user.badges.includes('✂️ Pro Cutter')) {
@@ -436,7 +436,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 user.badges.push(newBadge);
                 await user.save();
             }
-            
+
             // Notify user of new badge
             if (newBadge) {
                 try {
@@ -445,7 +445,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                         `🎉 <b>Congratulations!</b>\n\nYou earned a new badge: <b>${newBadge}</b>\n\nKeep using the bot to unlock more!`,
                         { parse_mode: 'HTML' }
                     );
-                } catch (_) {}
+                } catch (_) { }
             }
         } catch (e) {
             console.error('User badge error:', e);
