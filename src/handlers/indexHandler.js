@@ -77,7 +77,8 @@ async function indexMessage(msg, msgId, bot) {
     const categories = extractCategories(msg.caption || '');
 
     try {
-        const isNewMovie = !(await Movie.findOne({ title: movieName }));
+        const movie = await Movie.findOne({ title: movieName });
+        const isNewMovie = !movie;
 
         const updateData = {
             $setOnInsert: { title: movieName, requests: 0 },
@@ -86,6 +87,13 @@ async function indexMessage(msg, msgId, bot) {
                 files: fileInfo
             }
         };
+
+        // Auto-set thumbnail if it's a photo and movie has none
+        let thumbnailSet = false;
+        if (fileInfo.fileType === 'photo' && (!movie || !movie.thumbnail)) {
+            updateData.$set = { thumbnail: fileInfo.fileId };
+            thumbnailSet = true;
+        }
 
         // Add categories if any
         if (categories.length > 0) {
@@ -103,7 +111,13 @@ async function indexMessage(msg, msgId, bot) {
             await sendToLogChannel(bot, `📂 <b>New Movie Auto-Indexed</b>\n\n` +
                 `🎬 <b>${movieName}</b>\n` +
                 `📂 First clip added: ${fileInfo.fileType}\n` +
+                `${thumbnailSet ? '🖼️ <b>Thumbnail auto-set from photo!</b>\n' : ''}` +
                 `${categories.length > 0 ? `👤 Categories: ${categories.join(', ')}` : ''}`);
+        } else if (thumbnailSet) {
+            console.log(`🖼️ Auto-set thumbnail for: ${movieName}`);
+            await sendToLogChannel(bot, `🖼️ <b>Thumbnail Auto-Set</b>\n\n` +
+                `🎬 <b>${movieName}</b>\n` +
+                `📸 Set from forwarded photo`);
         } else if (categories.length > 0) {
             console.log(`📂 Added ${movieName} with categories: ${categories.join(', ')}`);
         }
