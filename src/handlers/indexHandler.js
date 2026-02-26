@@ -22,9 +22,9 @@ function extractFileInfo(msg) {
 // Extract categories from caption (supports hashtags and manual format)
 function extractCategories(caption) {
     if (!caption) return [];
-    
+
     const categories = [];
-    
+
     // Extract hashtags: #Rajinikanth
     const hashtags = caption.match(/#[\w]+/g);
     if (hashtags) {
@@ -32,17 +32,17 @@ function extractCategories(caption) {
             categories.push(tag.replace('#', '').trim());
         });
     }
-    
+
     // Extract format: (Hero: Rajinikanth, Heroine: Lakshmi)
     const heroMatch = caption.match(/hero[:\s]+([A-Za-z0-9]+)/i);
     if (heroMatch) categories.push(heroMatch[1].trim());
-    
+
     const heroineMatch = caption.match(/heroine[:\s]+([A-Za-z0-9]+)/i);
     if (heroineMatch) categories.push(heroineMatch[1].trim());
-    
+
     const directorMatch = caption.match(/director[:\s]+([A-Za-z0-9]+)/i);
     if (directorMatch) categories.push(directorMatch[1].trim());
-    
+
     return [...new Set(categories)]; // Remove duplicates
 }
 
@@ -51,9 +51,9 @@ function parseMessageLink(link) {
     // Format: https://t.me/c/1234567890/1234 or t.me/channel/1234
     const match = link.match(/t\.me\/(?:c\/)?(\d+|[a-zA-Z0-9_]+)\/(\d+)/i);
     if (match) {
-        return { 
-            channel: match[1], 
-            messageId: parseInt(match[2]) 
+        return {
+            channel: match[1],
+            messageId: parseInt(match[2])
         };
     }
     return null;
@@ -78,7 +78,7 @@ async function indexMessage(msg, msgId, bot) {
 
     try {
         const isNewMovie = !(await Movie.findOne({ title: movieName }));
-        
+
         const updateData = {
             $setOnInsert: { title: movieName, requests: 0 },
             $addToSet: {
@@ -86,7 +86,7 @@ async function indexMessage(msg, msgId, bot) {
                 files: fileInfo
             }
         };
-        
+
         // Add categories if any
         if (categories.length > 0) {
             updateData.$addToSet.categories = { $each: categories };
@@ -97,7 +97,7 @@ async function indexMessage(msg, msgId, bot) {
             updateData,
             { upsert: true, returnDocument: 'after' }
         );
-        
+
         if (isNewMovie) {
             console.log(`📂 Added NEW movie: ${movieName}`);
             await sendToLogChannel(bot, `📂 <b>New Movie Auto-Indexed</b>\n\n` +
@@ -130,19 +130,21 @@ module.exports = (bot) => {
     // Admin command to add movies using message link range
     bot.command('addmovie', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
+
         // Format: /addmovie MovieName | start_link | end_link | #hashtags
         const args = ctx.match.split('|');
         if (args.length < 3) {
             return ctx.reply(
-                `❌ <b>Usage:</b>\n` +
-                `/addmovie MovieName | start_link | end_link | #category1 #category2\n\n` +
+                `📥 <b>ADD NEW MOVIE</b>\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `<b>Usage:</b>\n` +
+                `<code>/addmovie MovieName | start_link | end_link | #category</code>\n\n` +
                 `📝 <b>Example:</b>\n` +
-                `/addmovie Leo | https://t.me/c/123/1 | https://t.me/c/123/10 | #Rajinikanth\n\n` +
+                `<code>/addmovie Leo | https://t.me/c/123/1 | https://t.me/c/123/10 | #Vijay</code>\n\n` +
                 `💡 <b>Tips:</b>\n` +
-                `• Copy message links from your database channel\n` +
-                `• Add categories with #hashtags at the end\n` +
-                `• All messages between links will be added!`,
+                `• Links must be from your database channel\n` +
+                `• Categories help in search results\n` +
+                `• All messages in range will be added!`,
                 { parse_mode: 'HTML' }
             );
         }
@@ -150,7 +152,7 @@ module.exports = (bot) => {
         const title = cleanMovieName(args[0].trim());
         const startLink = args[1].trim();
         const endLink = args[2].trim();
-        
+
         // Extract categories from 4th parameter (hashtags)
         let categories = [];
         if (args[3]) {
@@ -170,7 +172,7 @@ module.exports = (bot) => {
         // Get messages from the channel and add them
         try {
             let addedCount = 0;
-            
+
             const totalMsgs = endMsg.messageId - startMsg.messageId + 1;
             let progressMsg = await ctx.reply(
                 `🔄 <b>Indexing "${title}"...</b>\n\n` +
@@ -182,7 +184,7 @@ module.exports = (bot) => {
             // If same channel, get messages in range
             if (startMsg.channel === endMsg.channel) {
                 const channelId = startMsg.channel;
-                
+
                 // Convert to chat ID if needed (for private channels)
                 let chatId = channelId;
                 if (!channelId.startsWith('-100')) {
@@ -195,11 +197,11 @@ module.exports = (bot) => {
                     try {
                         const msgs = await ctx.api.getMessages(chatId, [msgId]);
                         const msg = Array.isArray(msgs) ? msgs[0] : msgs;
-                        
+
                         console.log('Msg ' + msgId + ': photo=' + !!msg.photo + ', video=' + !!msg.video + ', doc=' + !!msg.document + ', anim=' + !!msg.animation);
-                        
+
                         const fileInfo = extractFileInfo(msg);
-                        
+
                         // Detect thumbnail from first media found
                         if (!foundThumbnail) {
                             if (msg.photo && msg.photo.length > 0) {
@@ -220,7 +222,7 @@ module.exports = (bot) => {
                                 console.log('Found animation!');
                             }
                         }
-                        
+
                         if (fileInfo) {
                             // Extract categories from caption too
                             const captionCategories = extractCategories(msg.caption || '');
@@ -252,7 +254,7 @@ module.exports = (bot) => {
                                     `✅ Added: ${addedCount} files so far`,
                                     { parse_mode: 'HTML' }
                                 );
-                            } catch (_) {}
+                            } catch (_) { }
                         }
                     } catch (e) {
                         console.log(`Could not get message ${msgId}: ${e.message}`);
@@ -314,11 +316,13 @@ module.exports = (bot) => {
         const args = ctx.match.trim();
         if (!args) {
             return ctx.reply(
-                `🖼️ Set Thumbnail\n` +
-                `━━━━ ✦ ━━━━\n\n` +
-                `Reply to a photo with:\n` +
-                `/thumb movie_name\n\n` +
-                `Type /thumb list to see movies`,
+                `🖼️ <b>SET THUMBNAIL</b>\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `<b>How to set:</b>\n` +
+                `1️⃣ Reply to any photo\n` +
+                `2️⃣ Type: <code>/thumb movie_name</code>\n\n` +
+                `<b>Commands:</b>\n` +
+                `• <code>/thumb list</code> - See movie list`,
                 { parse_mode: 'HTML' }
             );
         }
@@ -328,14 +332,14 @@ module.exports = (bot) => {
             if (movies.length === 0) {
                 return ctx.reply(`No movies yet!`);
             }
-            
-            let text = `🖼️ Movies:\n`;
-            text += `━━━━ ✦ ━━━━\n\n`;
+
+            let text = `🖼️ <b>AVAILABLE MOVIES</b>\n`;
+            text += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
             movies.forEach((m, i) => {
-                text += `<code>${m.title}</code>${m.thumbnail ? ' ✓' : ''}\n`;
+                text += `🎬 <code>${m.title}</code>${m.thumbnail ? ' ✅' : ' ❌'}\n`;
             });
-            text += `\nReply to a photo and use:\n/thumb movie_name`;
-            
+            text += `\n<i>Reply to a photo with /thumb movie_name to set it!</i>`;
+
             return ctx.reply(text, { parse_mode: 'HTML' });
         }
 
@@ -348,7 +352,7 @@ module.exports = (bot) => {
         }
 
         const replyMsg = ctx.message.reply_to_message;
-        
+
         if (!replyMsg.photo || replyMsg.photo.length === 0) {
             return ctx.reply(`Reply to a photo!`);
         }
@@ -358,15 +362,15 @@ module.exports = (bot) => {
 
         try {
             let movie = await Movie.findOne({ title: movieName });
-            
+
             if (!movie) {
                 movie = await Movie.findOne({ title: { $regex: `^${movieName}$`, $options: 'i' } });
             }
-            
+
             if (!movie) {
                 movie = await Movie.findOne({ title: { $regex: movieName, $options: 'i' } });
             }
-            
+
             if (!movie) {
                 const movies = await Movie.find({ title: { $regex: movieName, $options: 'i' } }).limit(5);
                 if (movies.length > 0) {
@@ -403,11 +407,12 @@ module.exports = (bot) => {
         const args = ctx.match.trim();
         if (!args) {
             return ctx.reply(
-                `🗑️ Delete Movie\n` +
-                `━━━━ ✦ ━━━━\n\n` +
-                `Usage:\n` +
-                `/delmovie movie_name\n\n` +
-                `Type /delmovie list to see all movies`,
+                `🗑️ <b>DELETE MOVIE</b>\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `<b>Usage:</b>\n` +
+                `<code>/delmovie movie_name</code>\n\n` +
+                `<b>Commands:</b>\n` +
+                `• <code>/delmovie list</code> - See database list`,
                 { parse_mode: 'HTML' }
             );
         }
@@ -417,14 +422,14 @@ module.exports = (bot) => {
             if (movies.length === 0) {
                 return ctx.reply(`No movies in database!`);
             }
-            
-            let text = `🗑️ Movies in DB:\n`;
-            text += `━━━━ ✦ ━━━━\n\n`;
+
+            let text = `🗑️ <b>DATABASE LIST</b>\n`;
+            text += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
             movies.forEach((m, i) => {
-                text += `<code>${m.title}</code>\n`;
+                text += `🎬 <code>${m.title}</code>\n`;
             });
-            text += `\nUse: /delmovie movie_name`;
-            
+            text += `\n<b>Use:</b> <code>/delmovie movie_name</code>`;
+
             return ctx.reply(text, { parse_mode: 'HTML' });
         }
 
@@ -432,15 +437,15 @@ module.exports = (bot) => {
 
         try {
             let movie = await Movie.findOne({ title: movieName });
-            
+
             if (!movie) {
                 movie = await Movie.findOne({ title: { $regex: `^${movieName}$`, $options: 'i' } });
             }
-            
+
             if (!movie) {
                 movie = await Movie.findOne({ title: { $regex: movieName, $options: 'i' } });
             }
-            
+
             if (!movie) {
                 return ctx.reply(
                     `Not found: "${args}"\n` +
@@ -459,6 +464,81 @@ module.exports = (bot) => {
         } catch (error) {
             console.error('Error deleting movie:', error);
             ctx.reply(`Error: ${error.message}`);
+        }
+    });
+
+    bot.command('rename', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+
+        // Format: /rename old_name | new_name
+        const args = ctx.match.split('|');
+        if (args.length < 2) {
+            return ctx.reply(
+                `✏️ <b>Rename Filter</b>\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `<b>Usage:</b>\n` +
+                `/rename old_name | new_name\n\n` +
+                `<b>Example:</b>\n` +
+                `/rename moana | Moana (2016)\n\n` +
+                `💡 <i>Tip: Use | to separate old and new names</i>`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        const oldNameRaw = args[0].trim();
+        const newNameRaw = args[1].trim();
+
+        const oldName = cleanMovieName(oldNameRaw);
+        const newName = cleanMovieName(newNameRaw);
+
+        if (!oldName || !newName) {
+            return ctx.reply(`❌ Invalid names provided!`);
+        }
+
+        if (oldName === newName) {
+            return ctx.reply(`❌ Old and new names are the same!`);
+        }
+
+        try {
+            // Check if new name already exists
+            const existingNew = await Movie.findOne({ title: newName });
+            if (existingNew) {
+                return ctx.reply(`❌ A filter with the name "<b>${newName}</b>" already exists!`, { parse_mode: 'HTML' });
+            }
+
+            // Find the movie by old name (with fuzzy matching like /thumb and /delmovie)
+            let movie = await Movie.findOne({ title: oldName });
+            if (!movie) {
+                movie = await Movie.findOne({ title: { $regex: `^${oldName}$`, $options: 'i' } });
+            }
+            if (!movie) {
+                movie = await Movie.findOne({ title: { $regex: oldName, $options: 'i' } });
+            }
+
+            if (!movie) {
+                return ctx.reply(`❌ Filter "<b>${oldNameRaw}</b>" not found!`, { parse_mode: 'HTML' });
+            }
+
+            const actualOldName = movie.title;
+            movie.title = newName;
+            await movie.save();
+
+            await ctx.reply(
+                `✅ <b>Filter Renamed!</b>\n\n` +
+                `<b>Old Name:</b> <code>${actualOldName}</code>\n` +
+                `<b>New Name:</b> <code>${newName}</code>`,
+                { parse_mode: 'HTML' }
+            );
+
+            // Log the change
+            await sendToLogChannel(ctx.api, `✏️ <b>Filter Renamed</b>\n\n` +
+                `👤 Admin: ${ctx.from.first_name}\n` +
+                `🎬 Old: ${actualOldName}\n` +
+                `🎬 New: ${newName}`);
+
+        } catch (error) {
+            console.error('Error renaming movie:', error);
+            ctx.reply(`❌ Error: ${error.message}`);
         }
     });
 };

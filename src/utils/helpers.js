@@ -3,26 +3,37 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const cleanMovieName = (title) => {
     if (!title) return '';
 
-    // 1. Remove emojis and special characters at the start/end
-    let cleaned = title.replace(/^[\s\p{Emoji}\p{Symbol}]+|[\s\p{Emoji}\p{Symbol}]+$/gu, '');
+    // 1. Standard trim and delimiter cleanup
+    let raw = title.trim().replace(/[|\-]/g, ' ');
 
-    // 2. Handle delimiters like | or -
-    cleaned = cleaned.split('|')[0].split('-')[0];
+    let namePart = raw;
+    let handlePart = '';
 
-    // 3. Remove common search noise (case-insensitive)
+    // 2. Separate handle if exists (Shield it from noise filters)
+    if (raw.includes('@')) {
+        const parts = raw.split('@');
+        namePart = parts[0].trim();
+        handlePart = parts.slice(1).join('@').trim();
+    }
+
+    // 3. Remove common search noise from namePart ONLY
     const noisePatterns = [
         /download/gi, /full\s*movie/gi, /watch\s*online/gi, /tamil\s*dubbed/gi,
         /hindi\s*dubbed/gi, /web-dl/gi, /hdtv/gi, /720p/gi, /1080p/gi, /4k/gi,
-        /clips/gi, /movierulz/gi, /isaimini/gi, /tamilyogi/gi, /kuttymovies/gi,
-        /@\w+/g // mentions
+        /clips/gi, /movierulz/gi, /isaimini/gi, /tamilyogi/gi, /kuttymovies/gi
     ];
 
     noisePatterns.forEach(pattern => {
-        cleaned = cleaned.replace(pattern, '');
+        namePart = namePart.replace(pattern, '');
     });
 
-    // 4. Final normalization: lower, single space, trim
-    return cleaned.replace(/\s+/g, ' ').trim().toLowerCase();
+    // 4. Reconstruct and Final normalization
+    let finalTitle = namePart.trim();
+    if (handlePart) {
+        finalTitle = finalTitle ? `${finalTitle} - @${handlePart}` : `@${handlePart}`;
+    }
+
+    return finalTitle.replace(/\s+/g, ' ').trim().toLowerCase();
 };
 
 const encodeMovieLink = (movieName) => {

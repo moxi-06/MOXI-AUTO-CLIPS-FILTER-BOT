@@ -57,22 +57,22 @@ module.exports = (bot) => {
         // ─── No Payload → Welcome ───────────────────────────────────
         if (!moviePayload) {
             const welcome = await ctx.reply(
-                `👋 <b>HELLO WELCOME!</b>\n\n` +
-                `I am your clips assistant bot 🤖\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `🎬 <b>HOW TO USE:</b>\n\n` +
-                `1️⃣ Go to our group\n` +
-                `   👉 ${process.env.GROUP_LINK ? `<a href="${process.env.GROUP_LINK}">Click Here</a>` : '<b>Search in our group</b>'}\n\n` +
-                `2️⃣ Type any movie name\n` +
-                `   Example: <code>Leo</code> or <code>Jawan</code>\n\n` +
-                `3️⃣ Click the button I send\n` +
-                `   I will send all clips to your PM! 📬\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `💡 <b>TIPS:</b>\n` +
-                `• Type <code>/filters</code> in group to see all movies\n` +
-                `• Type movie name correctly for best results\n` +
-                `• Ask admin if clips not found!\n\n` +
-                `🎉 Enjoy your clips! 🍿`,
+                `👋 <b>WELCOME TO MOXI FILTERS!</b>\n\n` +
+                `I am your <b>Clips Assistant Bot</b> 🤖\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+                `🎬 <b>HOW TO GET CLIPS:</b>\n\n` +
+                `1️⃣ <b>Join our Group</b>\n` +
+                `   👉 ${process.env.GROUP_LINK ? `<a href="${process.env.GROUP_LINK}">Join Now! 🌟</a>` : '<b>Search in our group</b>'}\n\n` +
+                `2️⃣ <b>Type Movie Name</b>\n` +
+                `   <i>Example: Leo or Jawan</i>\n\n` +
+                `3️⃣ <b>Get Your Files</b>\n` +
+                `   I will deliver everything to your PM! 📬\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+                `💡 <b>QUICK TIPS:</b>\n` +
+                `• Type <code>/filters</code> to see all movies\n` +
+                `• Spelling doesn't matter, I'll fix it! ✨\n` +
+                `• Ask admin if clips are missing!\n\n` +
+                `🎉 <b>Enjoy Editing!</b> 🍿`,
                 { parse_mode: 'HTML', disable_web_page_preview: true }
             );
             autoDelete(ctx.api, ctx.chat.id, welcome.message_id);
@@ -93,10 +93,10 @@ module.exports = (bot) => {
             const expireStr = expiresAt.toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
             const msg = await ctx.reply(
                 `🎫 <b>24-HOUR PASS ACTIVATED</b> 🎫\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `✅ <b>Status:</b> You're in!\n` +
                 `⏰ <b>Valid until:</b> Today at ${expireStr}\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `<i>You can now get clips from the group. Enjoy! 🎬</i>`,
                 { parse_mode: 'HTML' }
             );
@@ -132,19 +132,19 @@ module.exports = (bot) => {
                 const wrappedUrl = await wrapShortlink(tokenStartUrl);
 
                 const msg = await ctx.reply(
-                    `🎫 <b>GET PASS TO WATCH</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `You need a <b>Pass</b> to get clips! 🎫\n\n` +
+                    `🎫 <b>GET ACCESS PASS</b>\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                    `You need a <b>24-Hour Pass</b> to edit clips! 🎫\n\n` +
                     `📝 <b>Easy Steps:</b>\n` +
-                    `1️⃣ Click button below\n` +
-                    `2️⃣ Get your pass (free)\n` +
-                    `3️⃣ Come back here!\n\n` +
-                    `Takes only 30 seconds! ⏱️\n\n` +
-                    `❤️ Support us by getting pass!`,
+                    `1️⃣ Click the button below\n` +
+                    `2️⃣ Get your pass (it's free!)\n` +
+                    `3️⃣ Come back here to edit!\n\n` +
+                    `⏱️ <b>Time:</b> Only 30 seconds!\n\n` +
+                    `❤️ <i>Your support keeps us alive!</i>`,
                     {
                         parse_mode: 'HTML',
                         reply_markup: {
-                            inline_keyboard: [[{ text: '🎫 Get Pass & Watch Movies', url: wrappedUrl }]]
+                            inline_keyboard: [[{ text: '🎫 Get Pass & Edit Clips', url: wrappedUrl }]]
                         }
                     }
                 );
@@ -180,10 +180,10 @@ module.exports = (bot) => {
             await ctx.api.editMessageText(
                 ctx.chat.id, wrapMsg.message_id,
                 `🎬 <b>${movie.title}</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `📂 <b>${movie.files?.length || movie.messageIds.length} clips</b> ready for you!\n\n` +
-                `👇 <b>CLICK BELOW</b> to get all clips!\n\n` +
-                `🔗 Link opens your private movie room`,
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `📂 <b>${movie.files?.length || movie.messageIds.length} Clips</b> are ready for you!\n\n` +
+                `🚀 <b>TAP THE BUTTON BELOW</b> to start!\n\n` +
+                `🔗 <i>Link opens your private movie room</i>`,
                 {
                     parse_mode: 'HTML',
                     reply_markup: {
@@ -241,7 +241,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 `📢 <b>One Last Step!</b>\n\n` +
                 `To receive your clips, you need to be a member of our main channel.\n\n` +
                 `<b>Why?</b> It keeps our community together and helps us keep this service free! 🙏\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `1️⃣ Join the channel below\n` +
                 `2️⃣ Come back and search again — clips will be delivered instantly!`,
                 {
@@ -388,15 +388,15 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // ── Send Delivery Card ───────────────────────────────────────
         await ctx.api.editMessageText(
             ctx.chat.id, waitMsgId,
-            `✅ <b>FILES READY!</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `🎬 <b>Movie:</b> ${movie.title}\n` +
-            `📂 <b>Clips:</b> ${movie.messageIds.length}\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `✅ <b>COMPLETELY READY!</b>\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `🎬 <b>Movie:</b> <code>${movie.title}</code>\n` +
+            `📂 <b>Clips:</b> ${movie.messageIds.length} Files\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `⚠️ <b>Note:</b>\n` +
-            `• Link works for <b>2 hours</b>\n` +
-            `• One time use only\n\n` +
-            `<i>Tap below to get your clips! 👇</i>`,
+            `• Access expires in <b>2 hours</b>\n` +
+            `• One-time entry only\n\n` +
+            `🚀 <i>Tap below to enter your room!</i>`,
             {
                 parse_mode: 'HTML',
                 reply_markup: {

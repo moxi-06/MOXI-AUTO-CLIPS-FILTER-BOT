@@ -53,62 +53,62 @@ module.exports = (bot) => {
     bot.command('help', async (ctx) => {
         const isGroup = ctx.chat.type !== 'private';
         const isAdminUser = isAdmin(ctx);
-        
+
         let helpText = `📖 HELP GUIDE\n`;
-        helpText += `━━━━ ✦ ━━━━\n\n`;
-        
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
+
         // WHAT IS THIS BOT
         helpText += `🎬 WHAT IS THIS BOT?\n`;
-        helpText += `━━━━ ✦ ━━━━\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `This bot helps you get movie clips!\n`;
         helpText += `Search in group → Get clips in your PM!\n`;
         helpText += `Simple as that! 😄\n\n`;
-        
+
         // HOW TO USE
         helpText += `📝 HOW TO GET CLIPS\n`;
-        helpText += `━━━━ ✦ ━━━━\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `Step 1: Join our group\n`;
         helpText += `Step 2: Type a movie name\n`;
         helpText += `Step 3: Tap the button I send\n`;
         helpText += `Step 4: Get clips in your PM! 📬\n\n`;
-        
+
         // EXAMPLE
         helpText += `💡 EXAMPLE\n`;
-        helpText += `━━━━ ✦ ━━━━\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `You type: "Leo"\n`;
         helpText += `Bot sends: Movie info + button\n`;
         helpText += `You tap button → Clips in PM!\n\n`;
-        
+
         // USER COMMANDS
         helpText += `📌 USER COMMANDS\n`;
-        helpText += `━━━━ ✦ ━━━━\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `/start - Start the bot\n`;
         helpText += `/help - Show this guide\n`;
         helpText += `/filters - Browse all movies\n`;
         helpText += `/myprofile - Your stats & badges\n`;
         helpText += `/todaystats - Today's activity\n\n`;
-        
+
         // TIPS
         helpText += `💡 TIPS\n`;
-        helpText += `━━━━ ✦ ━━━━\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `✓ Don't worry about spelling!\n`;
         helpText += `✓ I fix typos automatically\n`;
         helpText += `✓ Spaces don't matter\n`;
         helpText += `✓ Use /filters to browse movies\n\n`;
-        
+
         // NEW TO TELEGRAM?
         helpText += `📱 NEW TO TELEGRAM?\n`;
-        helpText += `━━━━ ✦ ━━━━\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `No problem! Just:\n`;
         helpText += `1. Join the group\n`;
         helpText += `2. Type any movie name\n`;
         helpText += `3. I'll handle the rest!\n`;
         helpText += `The clips will come to your chat (PM)\n\n`;
-        
+
         // ADMIN COMMANDS (if admin)
         if (isAdminUser) {
             helpText += `⚙️ ADMIN COMMANDS\n`;
-            helpText += `━━━━ ✦ ━━━━\n`;
+            helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
             helpText += `/stats - Full dashboard\n`;
             helpText += `/addmovie - Add new movie\n`;
             helpText += `/delmovie - Delete movie\n`;
@@ -119,10 +119,10 @@ module.exports = (bot) => {
             helpText += `/maintenance - Toggle mode\n`;
             helpText += `/resetbot - Reset all data\n\n`;
         }
-        
-        helpText += `━━━━ ✦ ━━━━\n`;
+
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `Need help? Contact admin!`;
-        
+
         await ctx.reply(helpText, { parse_mode: 'HTML' });
     });
 
@@ -134,12 +134,12 @@ module.exports = (bot) => {
 
         await ctx.reply(
             `📊 <b>TODAY'S ACTIVITY</b>\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `🔍 <b>Searches:</b> ${todaySearches}\n` +
             `📤 <b>Clips Delivered:</b> ${todayDeliveries}\n` +
             `✅ <b>Success Rate:</b> ${successRate}%\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `💡 <b>Tip:</b> Type a movie name to get clips!`,
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `💡 <b>Tip:</b> <i>Type a movie name to get clips!</i>`,
             { parse_mode: 'HTML' }
         );
     });
@@ -148,21 +148,21 @@ module.exports = (bot) => {
     bot.command('myprofile', async (ctx) => {
         try {
             const user = await User.findOne({ userId: ctx.from.id });
-            
+
             if (!user) {
                 return ctx.reply(
-                    `👤 <b>Your Profile</b>\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `🔍 Searches: 0\n` +
-                    `📥 Downloads: 0\n\n` +
-                    `🎖️ Badges: None yet!\n\n` +
-                    `💡 Start searching movies to earn badges!`,
+                    `👤 <b>YOUR PROFILE</b>\n\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                    `🔍 <b>Searches:</b> 0\n` +
+                    `📥 <b>Downloads:</b> 0\n\n` +
+                    `🎖️ <b>Badges:</b> None yet!\n\n` +
+                    `💡 <i>Start searching movies to earn badges!</i>`,
                     { parse_mode: 'HTML' }
                 );
             }
 
             const badges = user.badges.length > 0 ? user.badges.join('\n') : 'None yet!';
-            
+
             // Calculate progress to next badge
             let progress = '';
             if (user.downloadCount < 3) {
@@ -175,12 +175,14 @@ module.exports = (bot) => {
                 progress = `\n🎉 You have all badges!`;
             }
 
-            ctx.reply(
-                `👤 <b>Your Profile</b>\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            await ctx.reply(
+                `👤 <b>YOUR PROFILE</b>\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `🔍 <b>Searches:</b> ${user.searchCount || 0}\n` +
                 `📥 <b>Downloads:</b> ${user.downloadCount || 0}\n\n` +
-                `🎖️ <b>Your Badges:</b>\n${badges}\n${progress}`,
+                `🎖️ <b>Your Badges:</b>\n${badges}\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+                `${progress}`,
                 { parse_mode: 'HTML' }
             );
         } catch (e) {
@@ -192,14 +194,14 @@ module.exports = (bot) => {
     // Reset all user badges (admin only)
     bot.command('resetbadges', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
+
         const confirmKeyboard = new InlineKeyboard()
             .text('✅ Yes, Reset All', 'reset_badges_confirm')
             .text('❌ Cancel', 'reset_badges_cancel');
 
         await ctx.reply(
             `⚠️ <b>RESET ALL BADGES?</b>\n\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `This will remove ALL badges from ALL users.\n\n` +
             `This action cannot be undone!`,
             { parse_mode: 'HTML', reply_markup: confirmKeyboard }
@@ -209,17 +211,17 @@ module.exports = (bot) => {
     // Confirm reset badges
     bot.callbackQuery('reset_badges_confirm', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
+
         try {
             const result = await User.updateMany(
                 {},
                 { $set: { badges: [], searchCount: 0, downloadCount: 0 } }
             );
-            
+
             await ctx.answerCallbackQuery({ text: '✅ Badges reset!', show_alert: true });
             await ctx.editMessageText(
                 `✅ <b>ALL BADGES RESET!</b>\n\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `👥 Users affected: ${result.modifiedCount}\n\n` +
                 `All badges, searches, and downloads cleared!`,
                 { parse_mode: 'HTML' }
@@ -239,7 +241,7 @@ module.exports = (bot) => {
     // Reset Bot - Delete all data
     bot.command('resetbot', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
+
         const keyboard = new InlineKeyboard()
             .text('✅ Yes, Delete All', 'resetbot_confirm')
             .row()
@@ -262,14 +264,14 @@ module.exports = (bot) => {
     bot.callbackQuery('resetbot_confirm', async (ctx) => {
         if (!isAdmin(ctx)) return;
         await ctx.answerCallbackQuery();
-        
+
         try {
             await Movie.deleteMany({});
             await User.deleteMany({});
             await Token.deleteMany({});
             await Room.deleteMany({});
             await BotSettings.deleteMany({});
-            
+
             await ctx.editMessageText(
                 `✅ <b>RESET COMPLETE</b>\n\n` +
                 `All data has been deleted:\n` +
@@ -336,134 +338,134 @@ module.exports = (bot) => {
 
     bot.command('stats', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
+
         const totalMovies = await Movie.countDocuments();
         const totalUsers = await User.countDocuments();
-        
+
         // Calculate total clips
         const moviesWithClips = await Movie.find({}, { messageIds: 1, files: 1 });
         const totalClips = moviesWithClips.reduce((sum, m) => sum + (m.files?.length || m.messageIds?.length || 0), 0);
-        
+
         // Movies with thumbnails
         const moviesWithThumb = await Movie.countDocuments({ thumbnail: { $ne: null } });
-        
+
         // Growth Analytics
         const now = new Date();
         const last24h = new Date(now - 24 * 60 * 60 * 1000);
         const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
         const last30d = new Date(now - 30 * 24 * 60 * 60 * 1000);
-        
+
         const usersLast24h = await User.countDocuments({ joinedAt: { $gte: last24h } });
         const usersLast7d = await User.countDocuments({ joinedAt: { $gte: last7d } });
         const usersLast30d = await User.countDocuments({ joinedAt: { $gte: last30d } });
-        
+
         // Calculate active users (users who searched or downloaded)
         const activeUsers = await User.countDocuments({
             $or: [{ searchCount: { $gt: 0 } }, { downloadCount: { $gt: 0 } }]
         });
-        
+
         // Total searches & downloads
         const allUsers = await User.find({}, { searchCount: 1, downloadCount: 1 });
         const totalSearches = allUsers.reduce((sum, u) => sum + (u.searchCount || 0), 0);
         const totalDownloads = allUsers.reduce((sum, u) => sum + (u.downloadCount || 0), 0);
-        
+
         // Top searched movies
         const topMovies = await Movie.find().sort({ requests: -1 }).limit(10);
-        
+
         // Top downloaders
         const topUsers = await User.find().sort({ downloadCount: -1 }).limit(10);
-        
+
         // Room status
         const rooms = await Room.find();
         const freeRooms = rooms.filter(r => !r.isBusy).length;
         const busyRooms = rooms.filter(r => r.isBusy).length;
-        
+
         // Today's stats
         const todaySearches = global.todayStats?.searches || 0;
         const todayDeliveries = global.todayStats?.deliveries || 0;
-        
+
         // Week stats
         const weekSearches = Math.round(todaySearches * 7); // Approximate
         const weekDeliveries = Math.round(todayDeliveries * 7);
-        
+
         // Bot uptime
         const botUptime = process.uptime ? Math.floor(process.uptime() / 60) : 0;
         const uptimeHours = Math.floor(botUptime / 60);
-        
+
         // Maintenance mode check
         const maintenanceMode = process.env.MAINTENANCE_MODE === 'true' || global.maintenanceMode;
-        
+
         // Monetization status
         const mode = await getSetting('monetizationMode') || 'off';
-        
+
         // Build the stats message
         let statsText = `📊 DASHBOARD\n`;
-        statsText += `━━━━ ✦ ━━━━\n\n`;
-        
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
+
         // OVERVIEW SECTION
         statsText += `📈 OVERVIEW\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `🎬 Movies: ${totalMovies} | 📹 Clips: ${totalClips}\n`;
         statsText += `👥 Users: ${totalUsers} | ✅ Active: ${activeUsers}\n`;
         statsText += `🖼️ Thumbnails: ${moviesWithThumb}/${totalMovies}\n\n`;
-        
+
         // TODAY SECTION
         statsText += `📅 TODAY\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `🔍 Searches: ${todaySearches}\n`;
         statsText += `📤 Delivered: ${todayDeliveries}\n`;
-        statsText += `📊 Success: ${todaySearches > 0 ? Math.round((todayDeliveries/todaySearches)*100) : 0}%\n\n`;
-        
+        statsText += `📊 Success: ${todaySearches > 0 ? Math.round((todayDeliveries / todaySearches) * 100) : 0}%\n\n`;
+
         // WEEK SECTION
         statsText += `📆 THIS WEEK\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `👥 New Users: ${usersLast7d}\n`;
         statsText += `🔍 Searches: ~${weekSearches}\n`;
         statsText += `📤 Delivered: ~${weekDeliveries}\n\n`;
-        
+
         // MONTH SECTION
         statsText += `🗓️ THIS MONTH\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `👥 New Users: ${usersLast30d}\n`;
         statsText += `🔍 Total Searches: ${totalSearches}\n`;
         statsText += `📤 Total Downloads: ${totalDownloads}\n\n`;
-        
+
         // ROOMS SECTION
         statsText += `🏠 ROOMS\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `🟢 Free: ${freeRooms} | 🔴 Busy: ${busyRooms}\n`;
         statsText += `📊 Total: ${rooms.length}\n\n`;
-        
+
         // SYSTEM SECTION
-        statsText += `⚙️ SYSTEM\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
-        statsText += `⏱️ Uptime: ${uptimeHours} hours\n`;
-        statsText += `🔧 Mode: ${mode}\n`;
-        statsText += `🔒 Maintenance: ${maintenanceMode ? 'ON ⚠️' : 'OFF ✅'}\n`;
-        
+        statsText += `⚙️ <b>SYSTEM</b>\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
+        statsText += `⏱️ <b>Uptime:</b> ${uptimeHours} Hours\n`;
+        statsText += `🔧 <b>Mode:</b> ${mode.toUpperCase()}\n`;
+        statsText += `🔒 <b>Maintenance:</b> ${maintenanceMode ? 'ACTIVE ⚠️' : 'CLEAN ✅'}\n`;
+
         if (topMovies.length > 0) {
             statsText += `\n🔥 TOP MOVIES\n`;
-            statsText += `━━━━ ✦ ━━━━\n`;
+            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
             topMovies.forEach((m, i) => {
                 const clipCount = m.files?.length || m.messageIds?.length || 0;
-                statsText += `${i+1}. ${m.title} - ${m.requests} searches | ${clipCount} clips\n`;
+                statsText += `${i + 1}. ${m.title} - ${m.requests} searches | ${clipCount} clips\n`;
             });
         }
-        
+
         if (topUsers.length > 0) {
             statsText += `\n⭐ TOP DOWNLOADERS\n`;
-            statsText += `━━━━ ✦ ━━━━\n`;
+            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
             topUsers.forEach((u, i) => {
-                statsText += `${i+1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
+                statsText += `${i + 1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
             });
         }
-        
-        statsText += `\n━━━━ ✦ ━━━━\n`;
+
+        statsText += `\n━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `Type /stats for this dashboard\n`;
-        
+
         const keyboard = new InlineKeyboard()
             .text('🔄 Refresh', 'stats_refresh');
-        
+
         ctx.reply(statsText, { parse_mode: 'HTML', reply_markup: keyboard });
     });
 
@@ -472,21 +474,21 @@ module.exports = (bot) => {
         if (movies.length === 0) return ctx.reply('📭 No movies in database yet!');
 
         const shuffled = movies.sort(() => Math.random() - 0.5);
-        
+
         const { InlineKeyboard } = require('grammy');
         const ITEMS_PER_PAGE = 10;
         const page = 0;
-        
+
         const buildKeyboard = (movieList, currentPage) => {
             const keyboard = new InlineKeyboard();
             const start = currentPage * ITEMS_PER_PAGE;
             const end = start + ITEMS_PER_PAGE;
             const pageItems = movieList.slice(start, end);
-            
+
             pageItems.forEach(m => {
                 keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row();
             });
-            
+
             const totalPages = Math.ceil(movieList.length / ITEMS_PER_PAGE);
             if (totalPages > 1) {
                 const buttons = [];
@@ -504,9 +506,9 @@ module.exports = (bot) => {
         };
 
         const keyboard = buildKeyboard(shuffled, page);
-        
+
         let helpText = `📽️ ALL MOVIES\n`;
-        helpText += `━━━━ ✦ ━━━━\n\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
         helpText += `Tap a movie to get clips!\n\n`;
         helpText += `How it works:\n`;
         helpText += `Tap movie name below\n`;
@@ -515,7 +517,7 @@ module.exports = (bot) => {
         helpText += `Page: 1 / ${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}\n`;
         helpText += `Total: ${movies.length} movies`;
 
-        await ctx.reply(helpText, { 
+        await ctx.reply(helpText, {
             parse_mode: 'HTML',
             reply_markup: keyboard,
             reply_parameters: { message_id: ctx.message.message_id }
@@ -528,21 +530,21 @@ module.exports = (bot) => {
         if (movies.length === 0) return ctx.reply('📭 No movies in database yet!');
 
         const shuffled = movies.sort(() => Math.random() - 0.5);
-        
+
         const { InlineKeyboard } = require('grammy');
         const ITEMS_PER_PAGE = 10;
         const page = 0;
-        
+
         const buildKeyboard = (movieList, currentPage) => {
             const keyboard = new InlineKeyboard();
             const start = currentPage * ITEMS_PER_PAGE;
             const end = start + ITEMS_PER_PAGE;
             const pageItems = movieList.slice(start, end);
-            
+
             pageItems.forEach(m => {
                 keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row();
             });
-            
+
             const totalPages = Math.ceil(movieList.length / ITEMS_PER_PAGE);
             if (totalPages > 1) {
                 const buttons = [];
@@ -562,7 +564,7 @@ module.exports = (bot) => {
         const keyboard = buildKeyboard(shuffled, page);
 
         let helpText = `📽️ ALL MOVIES\n`;
-        helpText += `━━━━ ✦ ━━━━\n\n`;
+        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
         helpText += `Tap a movie to get clips!\n\n`;
         helpText += `How it works:\n`;
         helpText += `Tap movie name below\n`;
@@ -571,7 +573,7 @@ module.exports = (bot) => {
         helpText += `Page: 1 / ${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}\n`;
         helpText += `Total: ${movies.length} movies`;
 
-        await ctx.reply(helpText, { 
+        await ctx.reply(helpText, {
             parse_mode: 'HTML',
             reply_markup: keyboard
         });
@@ -580,7 +582,7 @@ module.exports = (bot) => {
     bot.command('top', async (ctx) => {
         if (!isAdmin(ctx)) return;
         const topMovies = await Movie.find().sort({ requests: -1 }).limit(10);
-        
+
         if (topMovies.length === 0) {
             return ctx.reply('No movies yet!');
         }
@@ -592,13 +594,13 @@ module.exports = (bot) => {
         });
 
         let text = `🔥 TOP MOVIES\n`;
-        text += `━━━━ ✦ ━━━━\n`;
+        text += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         topMovies.forEach((m, i) => {
             const icon = i === 0 ? '👑' : '🔸';
             text += `${icon} ${i + 1}. ${m.title} - ${m.requests} searches\n`;
         });
-        
-        text += `\n━━━━ ✦ ━━━━\n`;
+
+        text += `\n━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         text += `Tap a movie to get clips!`;
 
         await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
@@ -664,7 +666,7 @@ module.exports = (bot) => {
 
         const sent = await ctx.reply(
             `📡 <b>BROADCAST PREVIEW</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `📝 <b>Message:</b>\n${msgText}\n\n` +
             `👥 <b>Target:</b> ${users.length} users\n\n` +
             `⚠️ This will send to all users!`,
@@ -679,7 +681,7 @@ module.exports = (bot) => {
     bot.callbackQuery(/^bc_yes_(\d+)$/, async (ctx) => {
         if (!isAdmin(ctx)) return;
         const adminId = ctx.match[1];
-        
+
         if (ctx.from.id.toString() !== adminId) {
             await ctx.answerCallbackQuery({ text: '❌ Not authorized', show_alert: true });
             return;
@@ -692,11 +694,11 @@ module.exports = (bot) => {
         }
 
         await ctx.answerCallbackQuery({ text: '📡 Starting broadcast...', show_alert: false });
-        
+
         // Edit the message to show progress
         await ctx.editMessageText(
             `📡 <b>BROADCAST IN PROGRESS...</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
             `👤 Target: <b>${pending.users}</b> users`,
             { parse_mode: 'HTML' }
         );
@@ -723,7 +725,7 @@ module.exports = (bot) => {
 
         await ctx.editMessageText(
             `✅ <b>BROADCAST COMPLETE</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
             `🟢 <b>Success:</b> ${successCount}\n` +
             `🚫 <b>Blocked:</b> ${blockedCount}\n` +
             `❌ <b>Failed:</b> ${users.length - successCount - blockedCount}`,
@@ -734,7 +736,7 @@ module.exports = (bot) => {
     bot.callbackQuery(/^bc_no_(\d+)$/, async (ctx) => {
         if (!isAdmin(ctx)) return;
         const adminId = ctx.match[1];
-        
+
         if (ctx.from.id.toString() !== adminId) {
             await ctx.answerCallbackQuery({ text: '❌ Not authorized', show_alert: true });
             return;
@@ -781,11 +783,11 @@ module.exports = (bot) => {
 
         ctx.reply(
             `⚙️ <b>ADMIN SETTINGS PANEL</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
             `📂 <b>Mode:</b> ${modeIcon[mode] || mode}\n` +
             `🔗 <b>API URL:</b> <code>${shortlinkBase}</code>\n` +
             `📢 <b>Force Sub:</b> <code>${forceSubChannel}</code>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `📝 <b>Control Commands:</b>\n` +
             `▫️ <code>/setmode off|shortlink|token</code>\n` +
             `▫️ <code>/setshortlink [url]</code>\n` +
@@ -859,11 +861,11 @@ module.exports = (bot) => {
             }
 
             await ctx.answerCallbackQuery({ text: '📢 Redirecting to group...', show_alert: false });
-            
+
             // Send instructions to user
             await ctx.editMessageText(
                 `🎬 <b>${movie.title}</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `📂 <b>${movie.messageIds.length} clips</b> available!\n\n` +
                 `👇 Go to group and search for clips:\n` +
                 `<a href="https://t.me/${groupId.replace('-100', '')}">Click to Open Group</a>\n\n` +
@@ -878,108 +880,108 @@ module.exports = (bot) => {
     // Handle stats refresh callback
     bot.callbackQuery('stats_refresh', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
+
         await ctx.answerCallbackQuery({ text: '🔄 Refreshing...', show_alert: false });
-        
+
         const totalMovies = await Movie.countDocuments();
         const totalUsers = await User.countDocuments();
         const moviesWithClips = await Movie.find({}, { messageIds: 1, files: 1 });
         const totalClips = moviesWithClips.reduce((sum, m) => sum + (m.files?.length || m.messageIds?.length || 0), 0);
         const moviesWithThumb = await Movie.countDocuments({ thumbnail: { $ne: null } });
-        
+
         const now = new Date();
         const last24h = new Date(now - 24 * 60 * 60 * 1000);
         const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
         const last30d = new Date(now - 30 * 24 * 60 * 60 * 1000);
-        
+
         const usersLast24h = await User.countDocuments({ joinedAt: { $gte: last24h } });
         const usersLast7d = await User.countDocuments({ joinedAt: { $gte: last7d } });
         const usersLast30d = await User.countDocuments({ joinedAt: { $gte: last30d } });
-        
+
         const activeUsers = await User.countDocuments({
             $or: [{ searchCount: { $gt: 0 } }, { downloadCount: { $gt: 0 } }]
         });
-        
+
         const allUsers = await User.find({}, { searchCount: 1, downloadCount: 1 });
         const totalSearches = allUsers.reduce((sum, u) => sum + (u.searchCount || 0), 0);
         const totalDownloads = allUsers.reduce((sum, u) => sum + (u.downloadCount || 0), 0);
-        
+
         const topMovies = await Movie.find().sort({ requests: -1 }).limit(10);
         const topUsers = await User.find().sort({ downloadCount: -1 }).limit(10);
-        
+
         const rooms = await Room.find();
         const freeRooms = rooms.filter(r => !r.isBusy).length;
         const busyRooms = rooms.filter(r => r.isBusy).length;
-        
+
         const todaySearches = global.todayStats?.searches || 0;
         const todayDeliveries = global.todayStats?.deliveries || 0;
         const weekSearches = Math.round(todaySearches * 7);
         const weekDeliveries = Math.round(todayDeliveries * 7);
-        
+
         const botUptime = process.uptime ? Math.floor(process.uptime() / 60) : 0;
         const uptimeHours = Math.floor(botUptime / 60);
-        
+
         const maintenanceMode = process.env.MAINTENANCE_MODE === 'true' || global.maintenanceMode;
         const mode = await getSetting('monetizationMode') || 'off';
-        
+
         let statsText = `📊 DASHBOARD\n`;
-        statsText += `━━━━ ✦ ━━━━\n\n`;
-        
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
+
         statsText += `📈 OVERVIEW\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `🎬 Movies: ${totalMovies} | 📹 Clips: ${totalClips}\n`;
         statsText += `👥 Users: ${totalUsers} | ✅ Active: ${activeUsers}\n`;
         statsText += `🖼️ Thumbnails: ${moviesWithThumb}/${totalMovies}\n\n`;
-        
+
         statsText += `📅 TODAY\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `🔍 Searches: ${todaySearches}\n`;
         statsText += `📤 Delivered: ${todayDeliveries}\n`;
-        statsText += `📊 Success: ${todaySearches > 0 ? Math.round((todayDeliveries/todaySearches)*100) : 0}%\n\n`;
-        
+        statsText += `📊 Success: ${todaySearches > 0 ? Math.round((todayDeliveries / todaySearches) * 100) : 0}%\n\n`;
+
         statsText += `📆 THIS WEEK\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `👥 New Users: ${usersLast7d}\n`;
         statsText += `🔍 Searches: ~${weekSearches}\n`;
         statsText += `📤 Delivered: ~${weekDeliveries}\n\n`;
-        
+
         statsText += `🗓️ THIS MONTH\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `👥 New Users: ${usersLast30d}\n`;
         statsText += `🔍 Total Searches: ${totalSearches}\n`;
         statsText += `📤 Total Downloads: ${totalDownloads}\n\n`;
-        
+
         statsText += `🏠 ROOMS\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `🟢 Free: ${freeRooms} | 🔴 Busy: ${busyRooms}\n`;
         statsText += `📊 Total: ${rooms.length}\n\n`;
-        
+
         statsText += `⚙️ SYSTEM\n`;
-        statsText += `━━━━ ✦ ━━━━\n`;
+        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `⏱️ Uptime: ${uptimeHours} hours\n`;
         statsText += `🔧 Mode: ${mode}\n`;
         statsText += `🔒 Maintenance: ${maintenanceMode ? 'ON ⚠️' : 'OFF ✅'}\n`;
-        
+
         if (topMovies.length > 0) {
             statsText += `\n🔥 TOP MOVIES\n`;
-            statsText += `━━━━ ✦ ━━━━\n`;
+            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
             topMovies.forEach((m, i) => {
                 const clipCount = m.files?.length || m.messageIds?.length || 0;
-                statsText += `${i+1}. ${m.title} - ${m.requests} searches | ${clipCount} clips\n`;
+                statsText += `${i + 1}. ${m.title} - ${m.requests} searches | ${clipCount} clips\n`;
             });
         }
-        
+
         if (topUsers.length > 0) {
             statsText += `\n⭐ TOP DOWNLOADERS\n`;
-            statsText += `━━━━ ✦ ━━━━\n`;
+            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
             topUsers.forEach((u, i) => {
-                statsText += `${i+1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
+                statsText += `${i + 1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
             });
         }
-        
-        statsText += `\n━━━━ ✦ ━━━━\n`;
+
+        statsText += `\n━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         statsText += `Type /stats for this dashboard\n`;
-        
+
         const keyboard = new InlineKeyboard().text('🔄 Refresh', 'stats_refresh');
 
         try {

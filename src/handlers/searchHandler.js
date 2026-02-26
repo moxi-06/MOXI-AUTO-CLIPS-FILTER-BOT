@@ -47,9 +47,9 @@ function keyboardProximity(a, b) {
         if (row3.includes(c)) return 3;
         return 0;
     };
-    
+
     if (Math.abs(a.length - b.length) > 2) return 100;
-    
+
     let score = 0;
     const minLen = Math.min(a.length, b.length);
     for (let i = 0; i < minLen; i++) {
@@ -71,9 +71,9 @@ function soundex(s) {
     const a = s.toLowerCase().split('');
     const firstLetter = a[0];
     const codes = {
-        a:0,e:0,i:0,o:0,u:0,h:0,w:0,y:0,
-        b:1,f:1,p:1,v:1, c:2,g:2,j:2,k:2,q:2,s:2,x:2,z:2,
-        d:3,t:3, l:4, m:5,n:5, r:6
+        a: 0, e: 0, i: 0, o: 0, u: 0, h: 0, w: 0, y: 0,
+        b: 1, f: 1, p: 1, v: 1, c: 2, g: 2, j: 2, k: 2, q: 2, s: 2, x: 2, z: 2,
+        d: 3, t: 3, l: 4, m: 5, n: 5, r: 6
     };
     let result = firstLetter.toUpperCase();
     let prev = codes[a[0]] || 0;
@@ -114,55 +114,55 @@ async function findSimilarByTypo(query, threshold = 2) {
     const results = [];
     const q = query.toLowerCase();
     const qSoundex = soundex(q);
-    
+
     for (const movie of movies) {
         const title = movie.title.toLowerCase();
-        
+
         // 1. Exact match (already handled before this function, but skip anyway)
         if (title.includes(q)) continue;
-        
+
         // 2. Spaceless match
         if (matchesSpaceless(query, movie.title)) {
             results.push({ movie, score: -2, reason: 'spaceless' });
             continue;
         }
-        
+
         // 3. Token match
         if (matchesTokens(query, movie.title)) {
             results.push({ movie, score: -1, reason: 'tokens' });
             continue;
         }
-        
+
         // 4. Category match
-        const categoryMatch = movie.categories?.some(c => 
+        const categoryMatch = movie.categories?.some(c =>
             c.toLowerCase().includes(q)
         );
         if (categoryMatch) {
             results.push({ movie, score: 0, reason: 'category' });
             continue;
         }
-        
+
         // 5. Soundex match (phonetic)
         const titleSoundex = soundex(title);
         if (qSoundex === titleSoundex || qSoundex.charAt(0) === titleSoundex.charAt(0)) {
             results.push({ movie, score: 1, reason: 'soundex' });
             continue;
         }
-        
+
         // 6. Levenshtein distance
         const levDistance = levenshteinDistance(q, title);
         if (levDistance <= threshold) {
             results.push({ movie, score: levDistance + 2, reason: 'levenshtein' });
             continue;
         }
-        
+
         // 7. Keyboard proximity (for typo detection)
         const kbScore = keyboardProximity(q, title);
         if (kbScore <= 3) {
             results.push({ movie, score: kbScore + 4, reason: 'keyboard' });
         }
     }
-    
+
     // Sort by score (lower is better, negative scores = higher priority)
     results.sort((a, b) => a.score - b.score);
     return results.slice(0, 5);
@@ -193,13 +193,13 @@ async function updateUserStats(userId, type) {
     try {
         const user = await User.findOneAndUpdate(
             { userId },
-            { 
+            {
                 $inc: type === 'search' ? { searchCount: 1 } : { downloadCount: 1 },
                 $set: { lastActive: new Date() }
             },
             { upsert: true, returnDocument: 'after' }
         );
-        
+
         // Check for badge upgrade
         const newBadge = getUserBadge(user);
         if (newBadge && !user.badges.includes(newBadge)) {
@@ -216,7 +216,7 @@ async function updateUserStats(userId, type) {
 // Find similar movies based on categories
 async function findSimilarMovies(movie, limit = 3) {
     if (!movie.categories || movie.categories.length === 0) return [];
-    
+
     return await Movie.find({
         _id: { $ne: movie._id },
         categories: { $in: movie.categories }
@@ -228,26 +228,26 @@ function buildFilterKeyboard(movies, page, total) {
     const start = page * ITEMS_PER_PAGE;
     const end = start + ITEMS_PER_PAGE;
     const pageMovies = movies.slice(start, end);
-    
+
     pageMovies.forEach((m) => {
         const count = m.files?.length || m.messageIds.length;
         keyboard.text(`${m.title} (${count})`, `f_${m.title}`).row();
     });
-    
+
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
     const buttons = [];
-    
+
     if (page > 0) {
         buttons.push({ text: '⬅️ Prev', callback_data: `fp_${page - 1}` });
     }
     if (page < totalPages - 1) {
         buttons.push({ text: 'Next ➡️', callback_data: `fp_${page + 1}` });
     }
-    
+
     if (buttons.length > 0) {
         keyboard.row(...buttons);
     }
-    
+
     return keyboard;
 }
 
@@ -264,10 +264,10 @@ module.exports = (bot) => {
 
         // Check for common keywords to list filters
         const incomingText = (ctx.message.text || '').toLowerCase();
-        
+
         // Skip if no text or too short
         if (!incomingText || incomingText.length < 2) return;
-        
+
         const keywords = ['/filters', '/filter', 'filters', 'filter', 'clips', 'tamil', 'movie', 'movies', 'list'];
 
         if (keywords.includes(incomingText) || incomingText === 'list filters') {
@@ -278,33 +278,33 @@ module.exports = (bot) => {
             if (filterListState[ctx.chat.id]) {
                 try {
                     await ctx.api.deleteMessage(ctx.chat.id, filterListState[ctx.chat.id].messageId);
-                } catch (_) {}
+                } catch (_) { }
             }
 
             // Shuffle movies for random order
             const shuffled = movies.sort(() => Math.random() - 0.5);
-            
+
             const page = 0;
             const keyboard = buildFilterKeyboard(shuffled, page, shuffled.length);
 
-            const helpText = `📽️ Movie List\n` +
-                `━ ━ ━ ━ ✦ ━ ━ ━ ━\n\n` +
-                `Tap a movie to get clips!\n\n` +
-                `How it works:\n` +
-                `Tap movie name below\n` +
-                `-> Click the link in PM\n` +
-                `-> Get all clips!\n\n` +
-                `Page: 1 / ${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}\n` +
-                `Total: ${movies.length} movies`;
+            const helpText = `📽️ <b>MOVIE EXPLORER</b>\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `<b>Tap a movie below to get clips!</b>\n\n` +
+                `🚀 <b>How it works:</b>\n` +
+                `1️⃣ Tap a movie name\n` +
+                `2️⃣ Click the link in PM\n` +
+                `3️⃣ Get all clips instantly! 📬\n\n` +
+                `📊 <b>Page:</b> ${page + 1} / ${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}\n` +
+                `🎬 <b>Total:</b> ${movies.length} movies`;
 
-            const sent = await ctx.reply(helpText, { 
+            const sent = await ctx.reply(helpText, {
                 parse_mode: 'HTML',
                 reply_markup: keyboard,
                 reply_parameters: { message_id: ctx.message.message_id }
             });
 
-            filterListState[ctx.chat.id] = { 
-                messageId: sent.message_id, 
+            filterListState[ctx.chat.id] = {
+                messageId: sent.message_id,
                 movies: shuffled,
                 page: 0
             };
@@ -350,7 +350,7 @@ module.exports = (bot) => {
                     // Show up to 3 suggestions
                     const suggested = similarResults.slice(0, 3);
                     const keyboard = new InlineKeyboard();
-                    
+
                     suggested.forEach((item, index) => {
                         const num = index + 1;
                         keyboard.text(`${num}️⃣ ${item.movie.title}`, `typo_${item.movie.title}`);
@@ -358,13 +358,13 @@ module.exports = (bot) => {
                     });
                     keyboard.text('❌ None', 'typo_no');
 
-                    const suggestionText = suggested.length === 1 
-                        ? `🔍 Did you mean <b>${suggested[0].movie.title}</b>?`
-                        : `🔍 Did you mean one of these?\n\n${suggested.map((s, i) => `${i+1}. ${s.movie.title}`).join('\n')}`;
+                    const suggestionText = suggested.length === 1
+                        ? `🔍 <b>Did you mean:</b> <code>${suggested[0].movie.title}</code>?`
+                        : `🔍 <b>Did you mean one of these?</b>\n\n${suggested.map((s, i) => `${i + 1}️⃣ ${s.movie.title}`).join('\n')}`;
 
                     await ctx.reply(
                         `${suggestionText}\n\n` +
-                        `💡 You searched: <i>${query}</i>`,
+                        `💡 <i>You searched: ${query}</i>`,
                         {
                             parse_mode: 'HTML',
                             reply_markup: keyboard,
@@ -390,15 +390,15 @@ module.exports = (bot) => {
                 const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
 
                 const clipCount = movie.files?.length || movie.messageIds.length;
-                
+
                 // Get thumbnail from database
                 let photoFileId = movie.thumbnail || null;
-                
-                const resultText = `✨ ${movie.title.toUpperCase()}\n` +
-                    `━ ━ ━ ━ ✦ ━ ━ ━ ━\n` +
-                    `Clips: ${clipCount}\n` +
-                    `Delivery: PM\n` +
-                    `━ ━ ━ ━ ✦ ━ ━ ━ ━`;
+
+                const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+                    `📂 <b>Clips:</b> ${clipCount} Available\n` +
+                    `📥 <b>Delivery:</b> Direct PM\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━`;
 
                 let sentMsg;
                 if (photoFileId) {
@@ -428,7 +428,7 @@ module.exports = (bot) => {
                     similar.forEach(m => {
                         suggestKeyboard.text(m.title, `search_${m.title}`).row();
                     });
-                    
+
                     await ctx.reply(
                         `💡 Related movies:`,
                         {
@@ -444,10 +444,10 @@ module.exports = (bot) => {
                     try {
                         await ctx.api.editMessageText(
                             ctx.chat.id, sentMsg.message_id,
-                            `⏰ Expired\n` +
-                            `━ ━ ━ ━ ✦ ━ ━ ━ ━\n` +
-                            `Movie: ${movie.title}\n\n` +
-                            `Search again to get fresh link!`,
+                            `⏰ <b>LINK EXPIRED</b>\n` +
+                            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                            `🎬 <b>Movie:</b> ${movie.title}\n\n` +
+                            `🔍 <i>Search again to get a fresh link!</i>`,
                             { parse_mode: 'HTML' }
                         );
                     } catch (_) { }
@@ -480,12 +480,12 @@ module.exports = (bot) => {
                     let photoFileId = movie.thumbnail || null;
 
                     const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
-                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                         `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                         `📥 <b>Delivery:</b> Direct Private Message\n` +
                         `📊 <b>Today:</b> ${global.todayStats.deliveries} deliveries\n` +
                         `👤 ${userName}\n` +
-                        `━━━━━━━━━━━━━━━━━━━━`;
+                        `━━━━━━━━━ ✦ ━━━━━━━━━`;
 
                     let sentMsg;
                     if (photoFileId) {
@@ -543,9 +543,10 @@ module.exports = (bot) => {
                     });
 
                     await ctx.reply(
-                        `🔍 Search: "${query}"\n` +
-                        `━ ━ ━ ━ ✦ ━ ━ ━ ━\n\n` +
-                        `Tap a movie to get clips!`,
+                        `🔍 <b>SEARCH RESULTS:</b> "<code>${query}</code>"\n` +
+                        `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                        `🎬 <b>Multiple matches found!</b>\n` +
+                        `👇 Tap a movie to get clips:`,
                         {
                             reply_parameters: { message_id: ctx.message.message_id },
                             reply_markup: keyboard,
@@ -558,16 +559,16 @@ module.exports = (bot) => {
                     if (similarResults.length > 0) {
                         const suggested = similarResults.slice(0, 3);
                         const keyboard = new InlineKeyboard();
-                        
+
                         suggested.forEach((item, index) => {
                             keyboard.text(item.movie.title, `typo_${item.movie.title}`);
                             if (index % 2 === 1 || index === suggested.length - 1) keyboard.row();
                         });
                         keyboard.text('❌ None', 'typo_no');
 
-                        const suggestionText = suggested.length === 1 
+                        const suggestionText = suggested.length === 1
                             ? `❓ Did you mean: ${suggested[0].movie.title}?`
-                            : `❓ Did you mean:\n${suggested.map((s, i) => `${i+1}. ${s.movie.title}`).join('\n')}`;
+                            : `❓ Did you mean:\n${suggested.map((s, i) => `${i + 1}. ${s.movie.title}`).join('\n')}`;
 
                         await ctx.reply(
                             `${suggestionText}\n\n` +
@@ -580,9 +581,13 @@ module.exports = (bot) => {
                         );
                     } else {
                         await ctx.reply(
-                            `😕 No clips found for: "${query}"\n` +
-                            `━ ━ ━ ━ ✦ ━ ━ ━ ━\n` +
-                            `Check spelling or ask admin to add!`,
+                            `😕 <b>NO CLIPS FOUND</b>\n` +
+                            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                            `❌ Could not find: "<code>${query}</code>"\n\n` +
+                            `💡 <b>Tips:</b>\n` +
+                            `• Check your spelling\n` +
+                            `• Try a different keyword\n` +
+                            `• Ask admin to add it!`,
                             {
                                 parse_mode: 'HTML',
                                 reply_parameters: { message_id: ctx.message.message_id }
@@ -600,7 +605,7 @@ module.exports = (bot) => {
     // Handle typo suggestion - Yes
     bot.callbackQuery(/^typo_(.+)$/, async (ctx) => {
         const movieTitle = ctx.match[1];
-        
+
         if (movieTitle === 'no') {
             await ctx.answerCallbackQuery();
             await ctx.editMessageText(
@@ -626,15 +631,15 @@ module.exports = (bot) => {
                 await ctx.answerCallbackQuery({ text: '✅ Found it!', show_alert: false });
 
                 const clipCount = movie.files?.length || movie.messageIds.length;
-                
+
                 // Get thumbnail from database
                 let photoFileId = movie.thumbnail || null;
-                
+
                 const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                     `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                     `📥 <b>Delivery:</b> Direct Private Message\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                     `👆 Tap below to get clips!`;
 
                 if (photoFileId) {
@@ -666,14 +671,14 @@ module.exports = (bot) => {
             console.error('❌ Group search error:', error.message);
             try {
                 await sendToLogChannel(bot, `⚠️ <b>Search Error</b>\n<code>${error.message}</code>`);
-            } catch (e) {}
+            } catch (e) { }
         }
     });
 
     // Handle filter list movie selection
     bot.callbackQuery(/^f_(.+)$/, async (ctx) => {
         const movieTitle = ctx.match[1];
-        
+
         try {
             const movie = await Movie.findOne({ title: movieTitle });
             if (!movie) {
@@ -695,10 +700,10 @@ module.exports = (bot) => {
             let photoFileId = movie.thumbnail || null;
 
             const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                 `📥 <b>Delivery:</b> Direct Private Message\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `👆 Tap below to get clips!`;
 
             if (photoFileId) {
@@ -726,7 +731,7 @@ module.exports = (bot) => {
     // Handle search results (search_) - used in fuzzy results and similar movies
     bot.callbackQuery(/^search_(.+)$/, async (ctx) => {
         const movieTitle = ctx.match[1];
-        
+
         try {
             const movie = await Movie.findOne({ title: movieTitle });
             if (!movie) {
@@ -748,10 +753,10 @@ module.exports = (bot) => {
             let photoFileId = movie.thumbnail || null;
 
             const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                 `📥 <b>Delivery:</b> Direct Private Message\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `👆 Tap below to get clips!`;
 
             if (photoFileId) {
@@ -779,7 +784,7 @@ module.exports = (bot) => {
     // Handle filter list pagination
     bot.callbackQuery(/^fp_(\d+)$/, async (ctx) => {
         const page = parseInt(ctx.match[1]);
-        
+
         const state = filterListState[ctx.chat.id];
         if (!state) {
             await ctx.answerCallbackQuery({ text: 'Session expired', show_alert: true });
@@ -787,10 +792,10 @@ module.exports = (bot) => {
         }
 
         const keyboard = buildFilterKeyboard(state.movies, page, state.movies.length);
-        
+
         await ctx.answerCallbackQuery();
         await ctx.editMessageReplyMarkup({ reply_markup: keyboard });
-        
+
         filterListState[ctx.chat.id].page = page;
     });
 };
