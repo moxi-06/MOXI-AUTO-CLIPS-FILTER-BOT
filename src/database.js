@@ -66,11 +66,21 @@ const botSettingsSchema = new mongoose.Schema({
     value: { type: mongoose.Schema.Types.Mixed, required: true }
 });
 
+// Pagination Session Schema (to persist explorer state across restarts)
+const paginationSessionSchema = new mongoose.Schema({
+    chatId: { type: String, required: true, unique: true },
+    movieIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Movie' }],
+    page: { type: Number, default: 0 },
+    lastMessageId: { type: Number, default: null },
+    createdAt: { type: Date, default: Date.now, expires: 12 * 60 * 60 } // Auto-delete after 12 hours
+});
+
 const Movie = mongoose.model('Movie', movieSchema);
 const Room = mongoose.model('Room', roomSchema);
 const User = mongoose.model('User', userSchema);
 const Token = mongoose.model('Token', tokenSchema);
 const BotSettings = mongoose.model('BotSettings', botSettingsSchema);
+const PaginationSession = mongoose.model('PaginationSession', paginationSessionSchema);
 
 module.exports = {
     connectDB,
@@ -78,5 +88,6 @@ module.exports = {
     Room,
     User,
     Token,
-    BotSettings
+    BotSettings,
+    PaginationSession
 };

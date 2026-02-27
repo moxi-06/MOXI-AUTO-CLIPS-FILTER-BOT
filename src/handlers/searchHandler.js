@@ -1,9 +1,8 @@
-const { Movie, User } = require('../database');
+const { Movie, User, PaginationSession } = require('../database');
 const { cleanMovieName, encodeMovieLink, sendToLogChannel } = require('../utils/helpers');
 const { InlineKeyboard } = require('grammy');
 
 const ITEMS_PER_PAGE = 10;
-let filterListState = {};
 
 function getUserMention(ctx) {
     const user = ctx.from;
@@ -244,23 +243,21 @@ async function findSimilarMovies(movie, limit = 3) {
 
 function buildFilterKeyboard(movies, page, total) {
     const keyboard = new InlineKeyboard();
-    const start = page * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    const pageMovies = movies.slice(start, end);
 
-    pageMovies.forEach((m) => {
+    movies.forEach((m) => {
         const count = m.files?.length || m.messageIds.length;
-        keyboard.text(`${m.title} (${count})`, `f_${m.title}`).row();
+        // Premium Minimalist Style: TITLE (COUNT) ▸
+        keyboard.text(`${m.title.toUpperCase()} (${count}) ▸`, `f_${m.title}`).row();
     });
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
 
-    // Pagination buttons - Strictly vertical
+    // Strictly vertical pagination
     if (page < totalPages - 1) {
-        keyboard.text('Next ➡️', `fp_${page + 1}`).row();
+        keyboard.text('NEXT PAGE ›', `fp_${page + 1}`).row();
     }
     if (page > 0) {
-        keyboard.text('⬅️ Prev', `fp_${page - 1}`).row();
+        keyboard.text('‹ PREVIOUS PAGE', `fp_${page - 1}`).row();
     }
 
     return keyboard;
@@ -336,26 +333,34 @@ module.exports = (bot) => {
         const keywords = ['/filters', '/filter', 'filters', 'filter', 'clips', 'tamil', 'movie', 'movies', 'list'];
 
         if (keywords.includes(incomingText) || incomingText === 'list filters') {
-            const movies = await Movie.find();
-            if (movies.length === 0) return ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
+            const allMovies = await Movie.find().select('_id');
+            if (allMovies.length === 0) return ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
 
-            if (filterListState[ctx.chat.id]) {
-                try { await ctx.api.deleteMessage(ctx.chat.id, filterListState[ctx.chat.id].messageId); } catch (_) { }
+            // 1. Check for existing session and delete old message if possible
+            const existingSession = await PaginationSession.findOne({ chatId: ctx.chat.id.toString() });
+            if (existingSession && existingSession.lastMessageId) {
+                try {
+                    await ctx.api.deleteMessage(ctx.chat.id, existingSession.lastMessageId);
+                } catch (_) {
+                    // Message might be too old to delete or already deleted
+                }
             }
 
-            const shuffled = movies.sort(() => Math.random() - 0.5);
-            const page = 0;
-            const keyboard = buildFilterKeyboard(shuffled, page, shuffled.length);
+            // 2. Shuffle and prepare new session
+            const shuffledIds = allMovies.map(m => m._id).sort(() => Math.random() - 0.5);
 
-            const helpText = `📽️ <b>MOVIE EXPLORER</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `<b>Tap a movie below to get clips!</b>\n\n` +
-                `🚀 <b>How it works:</b>\n` +
-                `1️⃣ Tap a movie name\n` +
-                `2️⃣ Click the link in PM\n` +
-                `3️⃣ Get all clips instantly! 📬\n\n` +
-                `📊 <b>Page:</b> ${page + 1} / ${Math.ceil(shuffled.length / ITEMS_PER_PAGE)}\n` +
-                `🎬 <b>Total:</b> ${movies.length} movies`;
+            const pageMovies = await Movie.find({ _id: { $in: shuffledIds.slice(0, ITEMS_PER_PAGE) } });
+            // Preserve shuffle order from session
+            const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.equals(id)));
+
+            const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length);
+
+            const helpText = `💎 <b>MOVIE EXPLORER PREMIUM</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `🚀 <b>Select a movie to get clips:</b>\n\n` +
+                `📊 <b>Page:</b> 1 / ${Math.ceil(shuffledIds.length / ITEMS_PER_PAGE)}\n` +
+                `🎬 <b>Catalog:</b> ${shuffledIds.length} Movies Available\n\n` +
+                `💡 <i>Clips are delivered directly to your PM for quality!</i>`;
 
             const sent = await ctx.reply(helpText, {
                 parse_mode: 'HTML',
@@ -363,7 +368,16 @@ module.exports = (bot) => {
                 reply_parameters: { message_id: ctx.message.message_id }
             });
 
-            filterListState[ctx.chat.id] = { messageId: sent.message_id, movies: shuffled, page: 0 };
+            // 3. Persist new session with message ID
+            await PaginationSession.findOneAndUpdate(
+                { chatId: ctx.chat.id.toString() },
+                {
+                    movieIds: shuffledIds,
+                    page: 0,
+                    lastMessageId: sent.message_id
+                },
+                { upsert: true }
+            );
             return;
         }
 
@@ -623,21 +637,46 @@ module.exports = (bot) => {
         }
     });
 
-    // Handle filter list pagination
+    // Handle filter list pagination (with DB persistence)
     bot.callbackQuery(/^fp_(\d+)$/, async (ctx) => {
         const page = parseInt(ctx.match[1]);
+        try {
+            const session = await PaginationSession.findOne({ chatId: ctx.chat.id.toString() });
+            if (!session) {
+                return await ctx.answerCallbackQuery({
+                    text: '📑 Explorer expired. Type /filters to start again!',
+                    show_alert: true
+                });
+            }
 
-        const state = filterListState[ctx.chat.id];
-        if (!state) {
-            await ctx.answerCallbackQuery({ text: 'Session expired', show_alert: true });
-            return;
+            const start = page * ITEMS_PER_PAGE;
+            const end = start + ITEMS_PER_PAGE;
+            const pageIds = session.movieIds.slice(start, end);
+
+            const pageMovies = await Movie.find({ _id: { $in: pageIds } });
+            // Preserve order
+            const orderedMovies = pageIds.map(id => pageMovies.find(m => m._id.equals(id)));
+
+            const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
+
+            const helpText = `💎 <b>MOVIE EXPLORER PREMIUM</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `🚀 <b>Select a movie to get clips:</b>\n\n` +
+                `📊 <b>Page:</b> ${page + 1} / ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n` +
+                `🎬 <b>Catalog:</b> ${session.movieIds.length} Movies Available\n\n` +
+                `💡 <i>Clips are delivered directly to your PM for quality!</i>`;
+
+            await ctx.answerCallbackQuery();
+            await ctx.editMessageText(helpText, {
+                parse_mode: 'HTML',
+                reply_markup: keyboard
+            });
+
+            session.page = page;
+            await session.save();
+        } catch (error) {
+            console.error('Pagination error:', error);
+            await ctx.answerCallbackQuery({ text: '❌ Navigation error', show_alert: true });
         }
-
-        const keyboard = buildFilterKeyboard(state.movies, page, state.movies.length);
-
-        await ctx.answerCallbackQuery();
-        await ctx.editMessageReplyMarkup({ reply_markup: keyboard });
-
-        filterListState[ctx.chat.id].page = page;
     });
 };
