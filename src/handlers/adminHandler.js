@@ -883,4 +883,18 @@ module.exports = (bot) => {
             }
         }
     });
+
+    // Emergency Unlock Command
+    bot.command('unlock', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const targetId = ctx.match;
+        if (!targetId) return ctx.reply('❌ Usage: `/unlock {userId}`');
+
+        try {
+            await User.findOneAndUpdate({ userId: Number(targetId) }, { isDelivering: false });
+            ctx.reply(`✅ Lock cleared for user \`${targetId}\`.`);
+        } catch (e) {
+            ctx.reply(`❌ Error: ${e.message}`);
+        }
+    });
 };

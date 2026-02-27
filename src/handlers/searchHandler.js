@@ -247,7 +247,8 @@ function buildFilterKeyboard(movies, page, total) {
     movies.forEach((m) => {
         const count = m.files?.length || m.messageIds.length;
         // Premium Minimalist Style: ▸ TITLE (COUNT)
-        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})`, `f_${m.title}`).row();
+        // Braille space (U+2800) used for left-alignment feeling
+        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})⠀`, `f_${m.title}`).row();
     });
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
@@ -413,7 +414,7 @@ module.exports = (bot) => {
 
                     suggested.forEach((item) => {
                         const count = item.movie.files?.length || item.movie.messageIds.length;
-                        keyboard.text(`▸ ${item.movie.title.toUpperCase()} (${count})`, `typo_${item.movie.title}`).row();
+                        keyboard.text(`▸ ${item.movie.title.toUpperCase()} (${count})⠀`, `typo_${item.movie.title}`).row();
                     });
                     keyboard.text('✕ NONE OF THESE', 'typo_no');
 
@@ -451,7 +452,7 @@ module.exports = (bot) => {
                     // Strictly vertical buttons
                     fuzzyMovies.forEach(m => {
                         const count = m.files?.length || m.messageIds.length;
-                        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})`, `search_${m.title}`).row();
+                        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})⠀`, `search_${m.title}`).row();
                     });
 
                     return await ctx.reply(
@@ -476,7 +477,7 @@ module.exports = (bot) => {
                 const similar = await findSimilarMovies(movie, 3);
                 if (similar.length > 0) {
                     const suggestKeyboard = new InlineKeyboard();
-                    similar.forEach(m => suggestKeyboard.text(`▸ ${m.title.toUpperCase()}`, `search_${m.title}`).row());
+                    similar.forEach(m => suggestKeyboard.text(`▸ ${m.title.toUpperCase()}⠀`, `search_${m.title}`).row());
 
                     await ctx.reply(`💡 <b>You might also like:</b>`, {
                         reply_parameters: { message_id: sentMsg.message_id },
