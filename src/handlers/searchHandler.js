@@ -144,7 +144,7 @@ async function findSimilarByTypo(query, threshold = 2) {
 
         // 5. Soundex match (phonetic)
         const titleSoundex = soundex(title);
-        if (qSoundex === titleSoundex || qSoundex.charAt(0) === titleSoundex.charAt(0)) {
+        if (qSoundex === titleSoundex) {
             results.push({ movie, score: 1, reason: 'soundex' });
             continue;
         }
@@ -251,21 +251,71 @@ function buildFilterKeyboard(movies, page, total) {
     return keyboard;
 }
 
+// Helper to send a consistent movie result
+async function sendMovieResult(ctx, movie, bot, isAutoMatched = false) {
+    movie.requests += 1;
+    await movie.save();
+    await updateUserStats(ctx.from.id, 'search');
+
+    const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
+    const encodedTitle = encodeMovieLink(movie.title);
+    const privateStart = `https://t.me/${botUsername}?start=${encodedTitle}`;
+    const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
+
+    const clipCount = movie.files?.length || movie.messageIds.length;
+    const photoFileId = movie.thumbnail || null;
+
+    const resultText = (isAutoMatched ? `✨ <b>SMART MATCH FOUND</b>\n` : `✨ <b>${movie.title.toUpperCase()}</b>\n`) +
+        `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+        `${isAutoMatched ? `🎬 <b>Movie:</b> ${movie.title}\n` : ''}` +
+        `📂 <b>Clips:</b> ${clipCount} Available\n` +
+        `📥 <b>Delivery:</b> Direct PM\n` +
+        `━━━━━━━━━ ✦ ━━━━━━━━━`;
+
+    let sentMsg;
+    if (photoFileId) {
+        sentMsg = await ctx.replyWithPhoto(photoFileId, {
+            caption: resultText,
+            reply_parameters: { message_id: ctx.message?.message_id },
+            reply_markup: keyboard,
+            parse_mode: 'HTML'
+        });
+    } else {
+        sentMsg = await ctx.reply(resultText, {
+            reply_parameters: { message_id: ctx.message?.message_id },
+            reply_markup: keyboard,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // Auto-edit after 5 minutes
+    setTimeout(async () => {
+        try {
+            await ctx.api.editMessageText(
+                ctx.chat.id, sentMsg.message_id,
+                `⏰ <b>LINK EXPIRED</b>\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `🎬 <b>Movie:</b> ${movie.title}\n\n` +
+                `🔍 <i>Search again to get a fresh link!</i>`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (_) { }
+    }, 5 * 60 * 1000);
+
+    await sendToLogChannel(bot, `🔍 ${getUserNameForLog(ctx)} | ${movie.title} (${clipCount} clips)`);
+    return sentMsg;
+}
+
 module.exports = (bot) => {
     bot.on('message:text', async (ctx, next) => {
         const groupId = process.env.GROUP_ID;
         if (!groupId || ctx.chat.id.toString() !== groupId) return next();
 
-        // Skip old messages - only respond to messages after bot started
-        const messageDate = ctx.message.date * 1000; // Convert to milliseconds
-        if (messageDate < global.botStartedAt) {
-            return; // Ignore old messages
-        }
+        // Skip old messages
+        const messageDate = ctx.message.date * 1000;
+        if (messageDate < global.botStartedAt) return;
 
-        // Check for common keywords to list filters
         const incomingText = (ctx.message.text || '').toLowerCase();
-
-        // Skip if no text or too short
         if (!incomingText || incomingText.length < 2) return;
 
         const keywords = ['/filters', '/filter', 'filters', 'filter', 'clips', 'tamil', 'movie', 'movies', 'list'];
@@ -274,16 +324,11 @@ module.exports = (bot) => {
             const movies = await Movie.find();
             if (movies.length === 0) return ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
 
-            // Delete previous filter list if exists
             if (filterListState[ctx.chat.id]) {
-                try {
-                    await ctx.api.deleteMessage(ctx.chat.id, filterListState[ctx.chat.id].messageId);
-                } catch (_) { }
+                try { await ctx.api.deleteMessage(ctx.chat.id, filterListState[ctx.chat.id].messageId); } catch (_) { }
             }
 
-            // Shuffle movies for random order
             const shuffled = movies.sort(() => Math.random() - 0.5);
-
             const page = 0;
             const keyboard = buildFilterKeyboard(shuffled, page, shuffled.length);
 
@@ -303,68 +348,57 @@ module.exports = (bot) => {
                 reply_parameters: { message_id: ctx.message.message_id }
             });
 
-            filterListState[ctx.chat.id] = {
-                messageId: sent.message_id,
-                movies: shuffled,
-                page: 0
-            };
+            filterListState[ctx.chat.id] = { messageId: sent.message_id, movies: shuffled, page: 0 };
             return;
         }
 
         const query = cleanMovieName(ctx.message.text);
         if (query.length < 2) return;
 
-        // Track daily stats
         global.todayStats.searches++;
 
-        // Get user info with badge
-        const user = await User.findOne({ userId: ctx.from.id });
-        const badgeIcon = getBadgeIcon(user?.downloadCount || 0, user?.searchCount || 0);
-        const userName = ctx.from.first_name + (badgeIcon ? ` ${badgeIcon}` : '');
-
         try {
+            // 1. Exact Match
             let movie = await Movie.findOne({ title: query });
 
-            // If not found, try spaceless match (runtime, no DB change)
+            // 2. Spaceless Match
             if (!movie) {
                 const allMovies = await Movie.find();
-                const spacelessMatch = allMovies.find(m => matchesSpaceless(query, m.title));
-                if (spacelessMatch) {
-                    movie = spacelessMatch;
-                }
+                movie = allMovies.find(m => matchesSpaceless(query, m.title));
             }
 
-            // If still not found, try token match
+            // 3. Token Match
             if (!movie) {
                 const allMovies = await Movie.find();
-                const tokenMatch = allMovies.find(m => matchesTokens(query, m.title));
-                if (tokenMatch) {
-                    movie = tokenMatch;
-                }
+                movie = allMovies.find(m => matchesTokens(query, m.title));
             }
 
-            // If not found, try smart typo detection
+            // 4. Smart Matching (Typo/Category)
             if (!movie) {
                 const similarResults = await findSimilarByTypo(query);
-                if (similarResults.length > 0) {
-                    // Show up to 3 suggestions
+                if (similarResults.length === 1) {
+                    // Auto-select if only one suggestion
+                    movie = similarResults[0].movie;
+                    return await sendMovieResult(ctx, movie, bot, true);
+                } else if (similarResults.length > 1) {
+                    // Redesigned "Did you mean" UI
                     const suggested = similarResults.slice(0, 3);
                     const keyboard = new InlineKeyboard();
 
                     suggested.forEach((item, index) => {
-                        const num = index + 1;
-                        keyboard.text(`${num}️⃣ ${item.movie.title}`, `typo_${item.movie.title}`);
-                        if (index % 2 === 1 || index === suggested.length - 1) keyboard.row();
+                        keyboard.text(`🎬 ${item.movie.title}`, `typo_${item.movie.title}`).row();
                     });
-                    keyboard.text('❌ None', 'typo_no');
-
-                    const suggestionText = suggested.length === 1
-                        ? `🔍 <b>Did you mean:</b> <code>${suggested[0].movie.title}</code>?`
-                        : `🔍 <b>Did you mean one of these?</b>\n\n${suggested.map((s, i) => `${i + 1}️⃣ ${s.movie.title}`).join('\n')}`;
+                    keyboard.text('❌ None of these', 'typo_no');
 
                     await ctx.reply(
-                        `${suggestionText}\n\n` +
-                        `💡 <i>You searched: ${query}</i>`,
+                        `🔍 <b>DID YOU MEAN?</b>\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `I couldn't find an exact match for "<code>${query}</code>", but I found these:\n\n` +
+                        `${suggested.map((s, i) => `${i + 1}️⃣ <b>${s.movie.title}</b>`).join('\n')}\n\n` +
+                        `<b>Quick Guide:</b>\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `✨ <b>Tap a movie name</b> above if it's what you were looking for!\n` +
+                        `🎥 I'll send the clips straight to your PM.`,
                         {
                             parse_mode: 'HTML',
                             reply_markup: keyboard,
@@ -375,88 +409,8 @@ module.exports = (bot) => {
                 }
             }
 
-            // Fuzzy search results (title/category match)
-            if (movie) {
-                movie.requests += 1;
-                await movie.save();
-
-                // Update user stats
-                await updateUserStats(ctx.from.id, 'search');
-
-                const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
-                const encodedTitle = encodeMovieLink(movie.title);
-                const privateStart = `https://t.me/${botUsername}?start=${encodedTitle}`;
-
-                const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
-
-                const clipCount = movie.files?.length || movie.messageIds.length;
-
-                // Get thumbnail from database
-                let photoFileId = movie.thumbnail || null;
-
-                const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                    `📂 <b>Clips:</b> ${clipCount} Available\n` +
-                    `📥 <b>Delivery:</b> Direct PM\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━`;
-
-                let sentMsg;
-                if (photoFileId) {
-                    // Send with photo for single result
-                    sentMsg = await ctx.replyWithPhoto(photoFileId, {
-                        caption: resultText,
-                        reply_parameters: { message_id: ctx.message.message_id },
-                        reply_markup: keyboard,
-                        parse_mode: 'HTML'
-                    });
-                } else {
-                    // Send text only
-                    sentMsg = await ctx.reply(
-                        resultText,
-                        {
-                            reply_parameters: { message_id: ctx.message.message_id },
-                            reply_markup: keyboard,
-                            parse_mode: 'HTML'
-                        }
-                    );
-                }
-
-                // Find similar movies for suggestions
-                const similar = await findSimilarMovies(movie, 3);
-                if (similar.length > 0) {
-                    const suggestKeyboard = new InlineKeyboard();
-                    similar.forEach(m => {
-                        suggestKeyboard.text(m.title, `search_${m.title}`).row();
-                    });
-
-                    await ctx.reply(
-                        `💡 Related movies:`,
-                        {
-                            reply_parameters: { message_id: sentMsg.message_id },
-                            reply_markup: suggestKeyboard,
-                            parse_mode: 'HTML'
-                        }
-                    );
-                }
-
-                // Auto-edit after 5 minutes
-                setTimeout(async () => {
-                    try {
-                        await ctx.api.editMessageText(
-                            ctx.chat.id, sentMsg.message_id,
-                            `⏰ <b>LINK EXPIRED</b>\n` +
-                            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                            `🎬 <b>Movie:</b> ${movie.title}\n\n` +
-                            `🔍 <i>Search again to get a fresh link!</i>`,
-                            { parse_mode: 'HTML' }
-                        );
-                    } catch (_) { }
-                }, 5 * 60 * 1000);
-
-                await sendToLogChannel(bot, `🔍 ${getUserNameForLog(ctx)} | ${movie.title} (${movie.messageIds.length} clips)`);
-
-            } else {
-                // Search in title AND categories
+            // 5. Final Regex Search (if still nothing)
+            if (!movie) {
                 const fuzzyMovies = await Movie.find({
                     $or: [
                         { title: { $regex: query, $options: 'i' } },
@@ -465,140 +419,60 @@ module.exports = (bot) => {
                 }).limit(5);
 
                 if (fuzzyMovies.length === 1) {
-                    const movie = fuzzyMovies[0];
-                    movie.requests += 1;
-                    await movie.save();
-                    await updateUserStats(ctx.from.id, 'search');
-
-                    const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
-                    const encodedTitle = encodeMovieLink(movie.title);
-                    const privateStart = `https://t.me/${botUsername}?start=${encodedTitle}`;
-
-                    const keyboard = new InlineKeyboard().url('📥 Tap to Get Clips in PM', privateStart);
-
-                    const clipCount = movie.files?.length || movie.messageIds.length;
-                    let photoFileId = movie.thumbnail || null;
-
-                    const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
-                        `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                        `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                        `📥 <b>Delivery:</b> Direct Private Message\n` +
-                        `📊 <b>Today:</b> ${global.todayStats.deliveries} deliveries\n` +
-                        `👤 ${userName}\n` +
-                        `━━━━━━━━━ ✦ ━━━━━━━━━`;
-
-                    let sentMsg;
-                    if (photoFileId) {
-                        sentMsg = await ctx.replyWithPhoto(photoFileId, {
-                            caption: resultText,
-                            reply_parameters: { message_id: ctx.message.message_id },
-                            reply_markup: keyboard,
-                            parse_mode: 'HTML'
-                        });
-                    } else {
-                        sentMsg = await ctx.reply(
-                            resultText,
-                            {
-                                reply_parameters: { message_id: ctx.message.message_id },
-                                reply_markup: keyboard,
-                                parse_mode: 'HTML'
-                            }
-                        );
-                    }
-
-                    const similar = await findSimilarMovies(movie, 3);
-                    if (similar.length > 0) {
-                        const suggestKeyboard = new InlineKeyboard();
-                        similar.forEach(m => {
-                            suggestKeyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row();
-                        });
-                        await ctx.reply(
-                            `💡 <b>You might also like:</b>`,
-                            {
-                                reply_parameters: { message_id: sentMsg.message_id },
-                                reply_markup: suggestKeyboard,
-                                parse_mode: 'HTML'
-                            }
-                        );
-                    }
-
-                    setTimeout(async () => {
-                        try {
-                            await ctx.api.editMessageText(
-                                ctx.chat.id, sentMsg.message_id,
-                                `⏰ Expired\n` +
-                                `━ ━ ━ ━ ✦ ━ ━ ━ ━\n` +
-                                `Movie: ${movie.title}\n\n` +
-                                `Search again to get fresh link!`,
-                                { parse_mode: 'HTML' }
-                            );
-                        } catch (_) { }
-                    }, 5 * 60 * 1000);
-
-                    await sendToLogChannel(bot, `🔍 ${getUserNameForLog(ctx)} | ${movie.title} (${movie.messageIds.length} clips)`);
+                    movie = fuzzyMovies[0];
                 } else if (fuzzyMovies.length > 1) {
                     const keyboard = new InlineKeyboard();
-                    fuzzyMovies.forEach(m => {
-                        keyboard.text(m.title, `search_${m.title}`).row();
-                    });
+                    fuzzyMovies.forEach(m => keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row());
 
-                    await ctx.reply(
-                        `🔍 <b>SEARCH RESULTS:</b> "<code>${query}</code>"\n` +
-                        `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                        `🎬 <b>Multiple matches found!</b>\n` +
-                        `👇 Tap a movie to get clips:`,
+                    return await ctx.reply(
+                        `🔍 <b>SEARCH RESULTS</b>\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                        `Multiple matches found for "<code>${query}</code>":\n\n` +
+                        `👇 <b>Tap a movie to get clips:</b>`,
                         {
-                            reply_parameters: { message_id: ctx.message.message_id },
+                            parse_mode: 'HTML',
                             reply_markup: keyboard,
-                            parse_mode: 'HTML'
+                            reply_parameters: { message_id: ctx.message.message_id }
                         }
                     );
-                } else {
-                    // Try smart typo detection
-                    const similarResults = await findSimilarByTypo(query);
-                    if (similarResults.length > 0) {
-                        const suggested = similarResults.slice(0, 3);
-                        const keyboard = new InlineKeyboard();
-
-                        suggested.forEach((item, index) => {
-                            keyboard.text(item.movie.title, `typo_${item.movie.title}`);
-                            if (index % 2 === 1 || index === suggested.length - 1) keyboard.row();
-                        });
-                        keyboard.text('❌ None', 'typo_no');
-
-                        const suggestionText = suggested.length === 1
-                            ? `❓ Did you mean: ${suggested[0].movie.title}?`
-                            : `❓ Did you mean:\n${suggested.map((s, i) => `${i + 1}. ${s.movie.title}`).join('\n')}`;
-
-                        await ctx.reply(
-                            `${suggestionText}\n\n` +
-                            `You searched: ${query}`,
-                            {
-                                parse_mode: 'HTML',
-                                reply_markup: keyboard,
-                                reply_parameters: { message_id: ctx.message.message_id }
-                            }
-                        );
-                    } else {
-                        await ctx.reply(
-                            `😕 <b>NO CLIPS FOUND</b>\n` +
-                            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                            `❌ Could not find: "<code>${query}</code>"\n\n` +
-                            `💡 <b>Tips:</b>\n` +
-                            `• Check your spelling\n` +
-                            `• Try a different keyword\n` +
-                            `• Ask admin to add it!`,
-                            {
-                                parse_mode: 'HTML',
-                                reply_parameters: { message_id: ctx.message.message_id }
-                            }
-                        );
-                        await sendToLogChannel(bot, `❌ Miss: ${getUserNameForLog(ctx)} | ${query}`);
-                    }
                 }
             }
+
+            // Final delivery if movie was found
+            if (movie) {
+                const sentMsg = await sendMovieResult(ctx, movie, bot);
+
+                // Also suggest related movies
+                const similar = await findSimilarMovies(movie, 3);
+                if (similar.length > 0) {
+                    const suggestKeyboard = new InlineKeyboard();
+                    similar.forEach(m => suggestKeyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row());
+
+                    await ctx.reply(`💡 <b>You might also like:</b>`, {
+                        reply_parameters: { message_id: sentMsg.message_id },
+                        reply_markup: suggestKeyboard,
+                        parse_mode: 'HTML'
+                    });
+                }
+            } else {
+                // Truly not found
+                await ctx.reply(
+                    `😕 <b>NO CLIPS FOUND</b>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `❌ Could not find: "<code>${query}</code>"\n\n` +
+                    `💡 <b>Tips:</b>\n` +
+                    `• Check your spelling\n` +
+                    `• Try a different keyword\n` +
+                    `• Ask admin to add it!`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_parameters: { message_id: ctx.message.message_id }
+                    }
+                );
+                await sendToLogChannel(bot, `❌ Miss: ${getUserNameForLog(ctx)} | ${query}`);
+            }
         } catch (error) {
-            console.error('Filter callback error:', error);
+            console.error('Search error:', error);
         }
     });
 
@@ -631,64 +505,40 @@ module.exports = (bot) => {
                 await ctx.answerCallbackQuery({ text: '✅ Found it!', show_alert: false });
 
                 const clipCount = movie.files?.length || movie.messageIds.length;
-
-                // Get thumbnail from database
-                let photoFileId = movie.thumbnail || null;
+                const photoFileId = movie.thumbnail || null;
 
                 const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                     `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                    `📥 <b>Delivery:</b> Direct Private Message\n` +
+                    `📥 <b>Delivery:</b> Direct PM\n` +
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                     `👆 Tap below to get clips!`;
 
+                await ctx.answerCallbackQuery({ text: '✅ Found it!', show_alert: false });
+
                 if (photoFileId) {
-                    await ctx.editMessageText(
-                        resultText,
-                        {
-                            reply_markup: keyboard,
-                            parse_mode: 'HTML'
-                        }
-                    );
-                    await ctx.replyWithPhoto(photoFileId, {
-                        caption: resultText,
-                        reply_markup: keyboard,
-                        parse_mode: 'HTML'
-                    });
+                    await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                    await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
                 } else {
-                    await ctx.editMessageText(
-                        resultText,
-                        {
-                            reply_markup: keyboard,
-                            parse_mode: 'HTML'
-                        }
-                    );
+                    await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
                 }
             } else {
                 await ctx.answerCallbackQuery({ text: '❌ Clips not found', show_alert: true });
             }
         } catch (error) {
             console.error('❌ Group search error:', error.message);
-            try {
-                await sendToLogChannel(bot, `⚠️ <b>Search Error</b>\n<code>${error.message}</code>`);
-            } catch (e) { }
         }
     });
 
     // Handle filter list movie selection
     bot.callbackQuery(/^f_(.+)$/, async (ctx) => {
         const movieTitle = ctx.match[1];
-
         try {
             const movie = await Movie.findOne({ title: movieTitle });
-            if (!movie) {
-                await ctx.answerCallbackQuery({ text: '❌ Movie not found', show_alert: true });
-                return;
-            }
+            if (!movie) return await ctx.answerCallbackQuery({ text: '❌ Movie not found', show_alert: true });
 
             movie.requests += 1;
             await movie.save();
-
             await updateUserStats(ctx.from.id, 'search');
             await ctx.answerCallbackQuery({ text: '✅ Sending clips...', show_alert: false });
 
@@ -697,51 +547,35 @@ module.exports = (bot) => {
             const keyboard = new InlineKeyboard().url('📥 Tap to Get Clips in PM', privateStart);
 
             const clipCount = movie.files?.length || movie.messageIds.length;
-            let photoFileId = movie.thumbnail || null;
+            const photoFileId = movie.thumbnail || null;
 
             const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                `📥 <b>Delivery:</b> Direct Private Message\n` +
+                `📥 <b>Delivery:</b> Direct PM\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `👆 Tap below to get clips!`;
 
             if (photoFileId) {
-                await ctx.editMessageText(
-                    resultText,
-                    { reply_markup: keyboard, parse_mode: 'HTML' }
-                );
-                await ctx.replyWithPhoto(photoFileId, {
-                    caption: resultText,
-                    reply_markup: keyboard,
-                    parse_mode: 'HTML'
-                });
+                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
             } else {
-                await ctx.editMessageText(
-                    resultText,
-                    { reply_markup: keyboard, parse_mode: 'HTML' }
-                );
+                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
             }
         } catch (error) {
             console.error('Filter callback error:', error);
-            await ctx.answerCallbackQuery({ text: '❌ Error occurred', show_alert: true });
         }
     });
 
-    // Handle search results (search_) - used in fuzzy results and similar movies
+    // Handle search results (search_)
     bot.callbackQuery(/^search_(.+)$/, async (ctx) => {
         const movieTitle = ctx.match[1];
-
         try {
             const movie = await Movie.findOne({ title: movieTitle });
-            if (!movie) {
-                await ctx.answerCallbackQuery({ text: '❌ Movie not found', show_alert: true });
-                return;
-            }
+            if (!movie) return await ctx.answerCallbackQuery({ text: '❌ Movie not found', show_alert: true });
 
             movie.requests += 1;
             await movie.save();
-
             await updateUserStats(ctx.from.id, 'search');
             await ctx.answerCallbackQuery({ text: '✅ Sending clips...', show_alert: false });
 
@@ -750,34 +584,23 @@ module.exports = (bot) => {
             const keyboard = new InlineKeyboard().url('📥 Tap to Get Clips in PM', privateStart);
 
             const clipCount = movie.files?.length || movie.messageIds.length;
-            let photoFileId = movie.thumbnail || null;
+            const photoFileId = movie.thumbnail || null;
 
             const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                `📥 <b>Delivery:</b> Direct Private Message\n` +
+                `📥 <b>Delivery:</b> Direct PM\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                 `👆 Tap below to get clips!`;
 
             if (photoFileId) {
-                await ctx.editMessageText(
-                    resultText,
-                    { reply_markup: keyboard, parse_mode: 'HTML' }
-                );
-                await ctx.replyWithPhoto(photoFileId, {
-                    caption: resultText,
-                    reply_markup: keyboard,
-                    parse_mode: 'HTML'
-                });
+                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
             } else {
-                await ctx.editMessageText(
-                    resultText,
-                    { reply_markup: keyboard, parse_mode: 'HTML' }
-                );
+                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
             }
         } catch (error) {
             console.error('Search callback error:', error);
-            await ctx.answerCallbackQuery({ text: '❌ Error occurred', show_alert: true });
         }
     });
 
