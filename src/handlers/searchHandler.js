@@ -109,16 +109,22 @@ function levenshteinDistance(a, b) {
 }
 
 // Enhanced find similar movies with multiple matching strategies
-async function findSimilarByTypo(query, threshold = 2) {
+async function findSimilarByTypo(query) {
+    // Skip fuzzy for very short queries to avoid junk
+    if (query.length < 3) return [];
+
     const movies = await Movie.find();
     const results = [];
     const q = query.toLowerCase();
     const qSoundex = soundex(q);
 
+    // Dynamic threshold: stricter for shorter queries
+    const threshold = q.length < 5 ? 1 : 2;
+
     for (const movie of movies) {
         const title = movie.title.toLowerCase();
 
-        // 1. Exact match (already handled before this function, but skip anyway)
+        // 1. Exact title match (skip as handled before)
         if (title.includes(q)) continue;
 
         // 2. Spaceless match
@@ -133,13 +139,24 @@ async function findSimilarByTypo(query, threshold = 2) {
             continue;
         }
 
-        // 4. Category match
-        const categoryMatch = movie.categories?.some(c =>
-            c.toLowerCase().includes(q)
-        );
-        if (categoryMatch) {
-            results.push({ movie, score: 0, reason: 'category' });
+        // 4. Category match (STRICTER: word match only)
+        const qRegex = new RegExp(`\\b${q}\\b`, 'i');
+        const exactCategoryMatch = movie.categories?.some(c => qRegex.test(c));
+        if (exactCategoryMatch) {
+            results.push({ movie, score: -0.5, reason: 'category_exact' });
             continue;
+        }
+
+        // 4b. Category Fuzzy match (Little strict: 1 char mistake, min length 4)
+        if (q.length >= 4) {
+            const hasFuzzyCategory = movie.categories?.some(cat => {
+                const words = cat.toLowerCase().split(/\s+/);
+                return words.some(word => word.length >= 4 && levenshteinDistance(q, word) <= 1);
+            });
+            if (hasFuzzyCategory) {
+                results.push({ movie, score: 0.5, reason: 'category_fuzzy' });
+                continue;
+            }
         }
 
         // 5. Soundex match (phonetic)
@@ -156,14 +173,16 @@ async function findSimilarByTypo(query, threshold = 2) {
             continue;
         }
 
-        // 7. Keyboard proximity (for typo detection)
-        const kbScore = keyboardProximity(q, title);
-        if (kbScore <= 3) {
-            results.push({ movie, score: kbScore + 4, reason: 'keyboard' });
+        // 7. Keyboard proximity (only for longer queries)
+        if (q.length >= 5) {
+            const kbScore = keyboardProximity(q, title);
+            if (kbScore <= 2) { // Tightened from 3
+                results.push({ movie, score: kbScore + 4, reason: 'keyboard' });
+            }
         }
     }
 
-    // Sort by score (lower is better, negative scores = higher priority)
+    // Sort by score (lower is better)
     results.sort((a, b) => a.score - b.score);
     return results.slice(0, 5);
 }
@@ -235,17 +254,13 @@ function buildFilterKeyboard(movies, page, total) {
     });
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
-    const buttons = [];
 
-    if (page > 0) {
-        buttons.push({ text: '⬅️ Prev', callback_data: `fp_${page - 1}` });
-    }
+    // Pagination buttons - Strictly vertical
     if (page < totalPages - 1) {
-        buttons.push({ text: 'Next ➡️', callback_data: `fp_${page + 1}` });
+        keyboard.text('Next ➡️', `fp_${page + 1}`).row();
     }
-
-    if (buttons.length > 0) {
-        keyboard.row(...buttons);
+    if (page > 0) {
+        keyboard.text('⬅️ Prev', `fp_${page - 1}`).row();
     }
 
     return keyboard;
@@ -414,7 +429,7 @@ module.exports = (bot) => {
                 const fuzzyMovies = await Movie.find({
                     $or: [
                         { title: { $regex: query, $options: 'i' } },
-                        { categories: { $regex: query, $options: 'i' } }
+                        { categories: { $regex: `\\b${query}\\b`, $options: 'i' } } // Word boundary for categories
                     ]
                 }).limit(5);
 
@@ -422,6 +437,7 @@ module.exports = (bot) => {
                     movie = fuzzyMovies[0];
                 } else if (fuzzyMovies.length > 1) {
                     const keyboard = new InlineKeyboard();
+                    // Strictly vertical buttons
                     fuzzyMovies.forEach(m => keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row());
 
                     return await ctx.reply(
@@ -432,7 +448,7 @@ module.exports = (bot) => {
                         {
                             parse_mode: 'HTML',
                             reply_markup: keyboard,
-                            reply_parameters: { message_id: ctx.message.message_id }
+                            reply_parameters: { message_id: ctx.message?.message_id }
                         }
                     );
                 }
