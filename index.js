@@ -25,7 +25,7 @@ global.botStartedAt = Date.now();
 const rateLimiter = {
     lastRequest: 0,
     minInterval: 1000, // 1 second between requests
-    
+
     async wait() {
         const now = Date.now();
         const timeSinceLast = now - this.lastRequest;
@@ -110,9 +110,9 @@ async function bootstrap() {
     bot.catch((err) => {
         const updateId = err.ctx?.update?.update_id || 'unknown';
         const errorMessage = err.error?.message || err.toString();
-        
+
         console.error(`⚠️ Error on update ${updateId}:`, errorMessage);
-        
+
         // Handle rate limit errors specifically
         if (errorMessage.includes('Too Many Requests') || errorMessage.includes('429')) {
             console.warn('⏳ Rate limited! Waiting and retrying...');
@@ -130,19 +130,28 @@ async function bootstrap() {
         // Simple healthcheck to keep cloud instance awake
         app.get('/', (req, res) => res.send('✅ Bot is running!'));
 
+        // Clean Webster URL (remove trailing slash)
+        let cleanedWebhookUrl = WEBHOOK_URL.trim();
+        if (cleanedWebhookUrl.endsWith('/')) {
+            cleanedWebhookUrl = cleanedWebhookUrl.slice(0, -1);
+        }
+
         // GramMY Express Webhook Adapter
         app.post(`/${bot.token}`, webhookCallback(bot, 'express'));
 
         app.listen(PORT, async () => {
             console.log(`🤖 Express server started on port ${PORT}`);
             try {
-                await bot.api.setWebhook(`${WEBHOOK_URL}/${bot.token}`);
-                console.log(`✅ Webhook set successfully to target ${WEBHOOK_URL}`);
+                const finalWebhookPath = `${cleanedWebhookUrl}/${bot.token}`;
+                console.log(`📡 Setting webhook to: ${cleanedWebhookUrl}/<TOKEN_HIDDEN>`);
+
+                await bot.api.setWebhook(finalWebhookPath);
+                console.log(`✅ Webhook registration successful!`);
 
                 // Self-Pinging mechanism every 90 seconds to keep cloud server awake
                 setInterval(async () => {
                     try {
-                        await axios.get(WEBHOOK_URL, { timeout: 10000 });
+                        await axios.get(cleanedWebhookUrl, { timeout: 10000 });
                     } catch (err) {
                         console.warn('⚠️ Self-ping failed:', err.message);
                     }
@@ -150,6 +159,7 @@ async function bootstrap() {
 
             } catch (err) {
                 console.error('❌ Failed to set webhook:', err.message);
+                console.error('💡 TIP: Ensure your WEBHOOK_URL includes https:// and is your public Koyeb app URL.');
             }
         });
     } else {
@@ -187,16 +197,16 @@ async function bootstrap() {
     if (GROUP_ID) {
         const FIVE_HOURS = 5 * 60 * 60 * 1000;
         let promoInProgress = false;
-        
+
         const postPromotionalMessage = async () => {
             if (promoInProgress) return;
             promoInProgress = true;
-            
+
             try {
                 await rateLimiter.wait(); // Rate limit protection
-                
+
                 const topMovies = await MovieModel.find().sort({ requests: -1 }).limit(5);
-                
+
                 let topMoviesText = '';
                 if (topMovies.length > 0) {
                     topMoviesText = '\n\n🔥 <b>Top 5 Trending:</b>\n';
@@ -213,14 +223,14 @@ async function bootstrap() {
                 ];
 
                 const randomMsg = promoMessages[Math.floor(Math.random() * promoMessages.length)];
-                
+
                 const sent = await bot.api.sendMessage(GROUP_ID, randomMsg, { parse_mode: 'HTML' });
-                
+
                 // Auto-delete after 2 minutes
                 setTimeout(async () => {
                     try {
                         await bot.api.deleteMessage(GROUP_ID, sent.message_id);
-                    } catch (_) {}
+                    } catch (_) { }
                 }, 2 * 60 * 1000);
 
                 console.log('📢 Promotional message posted in group');
