@@ -120,7 +120,8 @@ async function bootstrap() {
     });
 
     // 4. Determine execution mode (Webhook for Koyeb vs Polling for Local)
-    const PORT = process.env.PORT || 3000;
+    const rawPort = process.env.PORT || '3000';
+    const PORT = parseInt(rawPort.toString().trim(), 10);
     const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
     if (WEBHOOK_URL) {
@@ -130,7 +131,7 @@ async function bootstrap() {
         // Simple healthcheck to keep cloud instance awake
         app.get('/', (req, res) => res.send('✅ Bot is running!'));
 
-        // Clean Webster URL (remove trailing slash)
+        // Clean WEBHOOK_URL (remove trailing slash)
         let cleanedWebhookUrl = WEBHOOK_URL.trim();
         if (cleanedWebhookUrl.endsWith('/')) {
             cleanedWebhookUrl = cleanedWebhookUrl.slice(0, -1);
@@ -139,8 +140,11 @@ async function bootstrap() {
         // GramMY Express Webhook Adapter
         app.post(`/${bot.token}`, webhookCallback(bot, 'express'));
 
-        app.listen(PORT, async () => {
-            console.log(`🤖 Express server started on port ${PORT}`);
+        app.listen(PORT, '0.0.0.0', async () => {
+            console.log(`🤖 Express server listening on: 0.0.0.0:${PORT} (${process.env.PORT ? 'ENV' : 'DEFAULT'})`);
+            if (PORT !== 3000 && PORT !== 80) {
+                console.log(`💡 NOTE: If Koyeb health checks fail, ensure your dashboard "Internal Port" matches ${PORT}.`);
+            }
             try {
                 const finalWebhookPath = `${cleanedWebhookUrl}/${bot.token}`;
                 console.log(`📡 Setting webhook to: ${cleanedWebhookUrl}/<TOKEN_HIDDEN>`);
