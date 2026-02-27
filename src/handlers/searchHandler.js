@@ -400,10 +400,11 @@ module.exports = (bot) => {
                     const suggested = similarResults.slice(0, 3);
                     const keyboard = new InlineKeyboard();
 
-                    suggested.forEach((item, index) => {
-                        keyboard.text(`🎬 ${item.movie.title}`, `typo_${item.movie.title}`).row();
+                    suggested.forEach((item) => {
+                        const count = item.movie.files?.length || item.movie.messageIds.length;
+                        keyboard.text(`${item.movie.title.toUpperCase()} (${count}) ▸`, `typo_${item.movie.title}`).row();
                     });
-                    keyboard.text('❌ None of these', 'typo_no');
+                    keyboard.text('✕ NONE OF THESE', 'typo_no');
 
                     await ctx.reply(
                         `🔍 <b>DID YOU MEAN?</b>\n` +
@@ -436,9 +437,11 @@ module.exports = (bot) => {
                 if (fuzzyMovies.length === 1) {
                     movie = fuzzyMovies[0];
                 } else if (fuzzyMovies.length > 1) {
-                    const keyboard = new InlineKeyboard();
                     // Strictly vertical buttons
-                    fuzzyMovies.forEach(m => keyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row());
+                    fuzzyMovies.forEach(m => {
+                        const count = m.files?.length || m.messageIds.length;
+                        keyboard.text(`${m.title.toUpperCase()} (${count}) ▸`, `search_${m.title}`).row();
+                    });
 
                     return await ctx.reply(
                         `🔍 <b>SEARCH RESULTS</b>\n` +
@@ -462,7 +465,7 @@ module.exports = (bot) => {
                 const similar = await findSimilarMovies(movie, 3);
                 if (similar.length > 0) {
                     const suggestKeyboard = new InlineKeyboard();
-                    similar.forEach(m => suggestKeyboard.text(`🎬 ${m.title}`, `search_${m.title}`).row());
+                    similar.forEach(m => suggestKeyboard.text(`${m.title.toUpperCase()} ▸`, `search_${m.title}`).row());
 
                     await ctx.reply(`💡 <b>You might also like:</b>`, {
                         reply_parameters: { message_id: sentMsg.message_id },
