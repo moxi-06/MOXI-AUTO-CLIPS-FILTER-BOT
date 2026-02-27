@@ -320,42 +320,34 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false) {
 
 module.exports = (bot) => {
     bot.on('message:text', async (ctx, next) => {
-        const groupId = process.env.GROUP_ID;
-        if (!groupId || ctx.chat.id.toString() !== groupId) return next();
-
-        // Skip old messages
-        const messageDate = ctx.message.date * 1000;
-        if (messageDate < global.botStartedAt) return;
-
         const incomingText = (ctx.message.text || '').toLowerCase();
-        if (!incomingText || incomingText.length < 2) return;
+        if (!incomingText || incomingText.length < 2) return next();
 
         const keywords = ['/filters', '/filter', 'filters', 'filter', 'clips', 'tamil', 'movie', 'movies', 'list'];
+        const isFiltersCommand = keywords.includes(incomingText) || incomingText === 'list filters';
 
-        if (keywords.includes(incomingText) || incomingText === 'list filters') {
+        const groupId = process.env.GROUP_ID;
+        const isGroup = groupId && ctx.chat.id.toString() === groupId;
+
+        // 1. Handle Filter List Command (Works in Group + PM)
+        if (isFiltersCommand) {
             const allMovies = await Movie.find().select('_id');
             if (allMovies.length === 0) return ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
 
-            // 1. Check for existing session and delete old message if possible
-            const existingSession = await PaginationSession.findOne({ chatId: ctx.chat.id.toString() });
+            // Singleton Clean-up (Delete old list in same chat)
+            const existingSession = await PaginationSession.findOne({ chatId: String(ctx.chat.id) });
             if (existingSession && existingSession.lastMessageId) {
                 try {
                     await ctx.api.deleteMessage(ctx.chat.id, existingSession.lastMessageId);
-                } catch (_) {
-                    // Message might be too old to delete or already deleted
-                }
+                } catch (_) { }
             }
 
-            // 2. Shuffle and prepare new session
             const shuffledIds = allMovies.map(m => m._id).sort(() => Math.random() - 0.5);
-
             const pageMovies = await Movie.find({ _id: { $in: shuffledIds.slice(0, ITEMS_PER_PAGE) } });
-            // Preserve shuffle order from session
             const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.equals(id)));
 
             const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length);
-
-            const helpText = `💎 <b>MOVIE EXPLORER PREMIUM</b>\n` +
+            const helpText = `💎 <b>MOVIE FILTER LIST</b>\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `🚀 <b>Select a movie to get clips:</b>\n\n` +
                 `📊 <b>Page:</b> 1 / ${Math.ceil(shuffledIds.length / ITEMS_PER_PAGE)}\n` +
@@ -368,18 +360,23 @@ module.exports = (bot) => {
                 reply_parameters: { message_id: ctx.message.message_id }
             });
 
-            // 3. Persist new session with message ID
             await PaginationSession.findOneAndUpdate(
-                { chatId: ctx.chat.id.toString() },
+                { chatId: String(ctx.chat.id) },
                 {
                     movieIds: shuffledIds,
                     page: 0,
                     lastMessageId: sent.message_id
                 },
-                { upsert: true }
+                { upsert: true, setDefaultsOnInsert: true }
             );
             return;
         }
+
+        // 2. Handle Movie Title Search (ONLY in Group)
+        if (!isGroup) return next();
+
+        // Skip old messages in group to prevent flood on restart
+        if (ctx.message.date * 1000 < global.botStartedAt) return;
 
         const query = cleanMovieName(ctx.message.text);
         if (query.length < 2) return;
@@ -641,10 +638,11 @@ module.exports = (bot) => {
     bot.callbackQuery(/^fp_(\d+)$/, async (ctx) => {
         const page = parseInt(ctx.match[1]);
         try {
-            const session = await PaginationSession.findOne({ chatId: ctx.chat.id.toString() });
+            const chatIdStr = String(ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id);
+            const session = await PaginationSession.findOne({ chatId: chatIdStr });
             if (!session) {
                 return await ctx.answerCallbackQuery({
-                    text: '📑 Explorer expired. Type /filters to start again!',
+                    text: '📑 Filter list expired. Type /filters to start again!',
                     show_alert: true
                 });
             }
@@ -659,7 +657,7 @@ module.exports = (bot) => {
 
             const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
 
-            const helpText = `💎 <b>MOVIE EXPLORER PREMIUM</b>\n` +
+            const helpText = `💎 <b>MOVIE FILTER LIST</b>\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
                 `🚀 <b>Select a movie to get clips:</b>\n\n` +
                 `📊 <b>Page:</b> ${page + 1} / ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n` +
