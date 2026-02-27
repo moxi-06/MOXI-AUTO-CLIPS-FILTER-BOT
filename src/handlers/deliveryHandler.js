@@ -84,7 +84,7 @@ module.exports = (bot) => {
             {
                 userId: ctx.from.id,
                 $or: [
-                    { isDelivering: false },
+                    { isDelivering: { $ne: true } }, // Match false or missing field
                     { lastDeliveryAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }
                 ]
             },
@@ -100,7 +100,10 @@ module.exports = (bot) => {
 
         const releaseLock = async () => await User.findOneAndUpdate({ userId: ctx.from.id }, { isDelivering: false });
 
-        if (!lockoutResult) return;
+        if (!lockoutResult) {
+            // Already delivering (lock active)
+            return ctx.reply('⏳ <b>Please wait!</b>\n\nI am still preparing your previous request. Please wait a minute before starting a new one! ⏱️', { parse_mode: 'HTML' });
+        }
 
         // ─── Token Claim: /start token_USERID ───────────────────────
         if (moviePayload.startsWith('token_')) {
@@ -327,7 +330,8 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             const groups = {};
             files.forEach(f => {
                 let g = f.fileType;
-                if (g === 'photo' || g === 'video') g = 'visual'; // Only these two can be mixed together
+                // Photos, Videos, and Animations can coexist in a visual album
+                if (g === 'photo' || g === 'video' || g === 'animation') g = 'visual';
                 if (!groups[g]) groups[g] = [];
                 groups[g].push(f);
             });
@@ -336,7 +340,11 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 for (let i = 0; i < items.length; i += 10) {
                     const chunk = items.slice(i, i + 10);
                     const mediaGroup = chunk.map((f, idx) => {
-                        const base = { type: f.fileType, media: f.fileId };
+                        // In albums, 'animation' must be sent as 'video'
+                        let type = f.fileType;
+                        if (type === 'animation') type = 'video';
+
+                        const base = { type: type, media: f.fileId };
                         if (idx === 0 && f.caption) base.caption = f.caption;
                         return base;
                     });
@@ -345,7 +353,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                         if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
                         await sleep(1500);
                     } catch (e) {
-                        console.error(`[mediaBatch] sendMediaGroup failed for ${items[0]?.fileType}:`, e.message);
+                        console.error(`[mediaBatch] sendMediaGroup failed:`, e.message);
                         for (const f of chunk) {
                             try {
                                 let m;
