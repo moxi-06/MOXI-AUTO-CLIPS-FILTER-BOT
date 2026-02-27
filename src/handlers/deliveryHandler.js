@@ -124,6 +124,7 @@ module.exports = (bot) => {
             );
             autoDelete(ctx.api, ctx.chat.id, msg.message_id);
             await releaseLock();
+            await sendToLogChannel(bot, `🎫 *Token Granted*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)`);
             return;
         }
 
@@ -170,6 +171,7 @@ module.exports = (bot) => {
                 );
                 autoDelete(ctx.api, ctx.chat.id, msg.message_id);
                 await releaseLock();
+                await sendToLogChannel(bot, `🔒 *Token Required*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
                 return;
             }
             const timeLeft = await getTokenExpiry(ctx.from.id);
@@ -202,6 +204,7 @@ module.exports = (bot) => {
             );
             autoDelete(ctx.api, ctx.chat.id, wrapMsg.message_id);
             await releaseLock();
+            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
             return;
         } else {
             const waitMsg = await ctx.reply(
@@ -320,17 +323,13 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         const files = movie.files && movie.files.length > 0 ? movie.files : null;
 
         if (files) {
-            // ── New path: group by type to avoid "mixed media" error ──
-            const mediaGroups = {
-                album: [], // Photo + Video
-                document: [],
-                audio: []
-            };
-
+            // ── New path: group by strict type to avoid Telegram errors ──
+            const groups = {};
             files.forEach(f => {
-                if (f.fileType === 'photo' || f.fileType === 'video') mediaGroups.album.push(f);
-                else if (f.fileType === 'audio') mediaGroups.audio.push(f);
-                else mediaGroups.document.push(f);
+                let g = f.fileType;
+                if (g === 'photo' || g === 'video') g = 'visual'; // Only these two can be mixed together
+                if (!groups[g]) groups[g] = [];
+                groups[g].push(f);
             });
 
             const sendBatch = async (items) => {
@@ -346,6 +345,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                         if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
                         await sleep(1500);
                     } catch (e) {
+                        console.error(`[mediaBatch] sendMediaGroup failed for ${items[0]?.fileType}:`, e.message);
                         for (const f of chunk) {
                             try {
                                 let m;
@@ -353,6 +353,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                                 else if (f.fileType === 'photo') m = await ctx.api.sendPhoto(room.roomId, f.fileId, { caption: f.caption || undefined });
                                 else if (f.fileType === 'document') m = await ctx.api.sendDocument(room.roomId, f.fileId, { caption: f.caption || undefined });
                                 else if (f.fileType === 'audio') m = await ctx.api.sendAudio(room.roomId, f.fileId, { caption: f.caption || undefined });
+                                else if (f.fileType === 'animation') m = await ctx.api.sendAnimation(room.roomId, f.fileId, { caption: f.caption || undefined });
                                 if (m) newMessageIds.push(m.message_id);
                                 await sleep(500);
                             } catch (_) { }
@@ -361,9 +362,9 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 }
             };
 
-            if (mediaGroups.album.length > 0) await sendBatch(mediaGroups.album);
-            if (mediaGroups.document.length > 0) await sendBatch(mediaGroups.document);
-            if (mediaGroups.audio.length > 0) await sendBatch(mediaGroups.audio);
+            for (const type of Object.keys(groups)) {
+                await sendBatch(groups[type]);
+            }
         } else {
             // ── Legacy path: copyMessages using stored messageIds ──
             const dbChannel = process.env.DB_CHANNEL_ID;
