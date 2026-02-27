@@ -51,7 +51,9 @@ const userSchema = new mongoose.Schema({
     searchCount: { type: Number, default: 0 },
     downloadCount: { type: Number, default: 0 },
     badges: { type: [String], default: [] },
-    lastActive: { type: Date, default: Date.now }
+    lastActive: { type: Date, default: Date.now },
+    isDelivering: { type: Boolean, default: false },
+    lastDeliveryAt: { type: Date, default: null }
 });
 
 // Token Schema (for Token Mode - 24hr access pass per user)

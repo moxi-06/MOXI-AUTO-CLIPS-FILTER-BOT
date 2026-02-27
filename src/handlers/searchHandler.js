@@ -246,8 +246,8 @@ function buildFilterKeyboard(movies, page, total) {
 
     movies.forEach((m) => {
         const count = m.files?.length || m.messageIds.length;
-        // Premium Minimalist Style: TITLE (COUNT) ▸
-        keyboard.text(`${m.title.toUpperCase()} (${count}) ▸`, `f_${m.title}`).row();
+        // Premium Minimalist Style: ▸ TITLE (COUNT)
+        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})`, `f_${m.title}`).row();
     });
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
@@ -277,7 +277,7 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false) {
     const clipCount = movie.files?.length || movie.messageIds.length;
     const photoFileId = movie.thumbnail || null;
 
-    const resultText = (isAutoMatched ? `✨ <b>SMART MATCH FOUND</b>\n` : `✨ <b>${movie.title.toUpperCase()}</b>\n`) +
+    const resultText = (isAutoMatched ? `✨ SMART MATCH FOUND\n` : `✨ ${movie.title.toUpperCase()}\n`) +
         `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
         `${isAutoMatched ? `🎬 <b>Movie:</b> ${movie.title}\n` : ''}` +
         `📂 <b>Clips:</b> ${clipCount} Available\n` +
@@ -347,9 +347,9 @@ module.exports = (bot) => {
             const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.equals(id)));
 
             const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length);
-            const helpText = `💎 <b>MOVIE FILTER LIST</b>\n` +
+            const helpText = `💎 MOVIE FILTER LIST\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🚀 <b>Select a movie to get clips:</b>\n\n` +
+                `🚀 Select a movie to get clips:\n\n` +
                 `📊 <b>Page:</b> 1 / ${Math.ceil(shuffledIds.length / ITEMS_PER_PAGE)}\n` +
                 `🎬 <b>Catalog:</b> ${shuffledIds.length} Movies Available\n\n` +
                 `💡 <i>Clips are delivered directly to your PM for quality!</i>`;
@@ -413,7 +413,7 @@ module.exports = (bot) => {
 
                     suggested.forEach((item) => {
                         const count = item.movie.files?.length || item.movie.messageIds.length;
-                        keyboard.text(`${item.movie.title.toUpperCase()} (${count}) ▸`, `typo_${item.movie.title}`).row();
+                        keyboard.text(`▸ ${item.movie.title.toUpperCase()} (${count})`, `typo_${item.movie.title}`).row();
                     });
                     keyboard.text('✕ NONE OF THESE', 'typo_no');
 
@@ -451,7 +451,7 @@ module.exports = (bot) => {
                     // Strictly vertical buttons
                     fuzzyMovies.forEach(m => {
                         const count = m.files?.length || m.messageIds.length;
-                        keyboard.text(`${m.title.toUpperCase()} (${count}) ▸`, `search_${m.title}`).row();
+                        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})`, `search_${m.title}`).row();
                     });
 
                     return await ctx.reply(
@@ -476,7 +476,7 @@ module.exports = (bot) => {
                 const similar = await findSimilarMovies(movie, 3);
                 if (similar.length > 0) {
                     const suggestKeyboard = new InlineKeyboard();
-                    similar.forEach(m => suggestKeyboard.text(`${m.title.toUpperCase()} ▸`, `search_${m.title}`).row());
+                    similar.forEach(m => suggestKeyboard.text(`▸ ${m.title.toUpperCase()}`, `search_${m.title}`).row());
 
                     await ctx.reply(`💡 <b>You might also like:</b>`, {
                         reply_parameters: { message_id: sentMsg.message_id },
@@ -537,7 +537,7 @@ module.exports = (bot) => {
                 const clipCount = movie.files?.length || movie.messageIds.length;
                 const photoFileId = movie.thumbnail || null;
 
-                const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
+                const resultText = `✨ ${movie.title.toUpperCase()}\n` +
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                     `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                     `📥 <b>Delivery:</b> Direct PM\n` +
@@ -579,7 +579,7 @@ module.exports = (bot) => {
             const clipCount = movie.files?.length || movie.messageIds.length;
             const photoFileId = movie.thumbnail || null;
 
-            const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
+            const resultText = `✨ ${movie.title.toUpperCase()}\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                 `📥 <b>Delivery:</b> Direct PM\n` +
@@ -616,7 +616,7 @@ module.exports = (bot) => {
             const clipCount = movie.files?.length || movie.messageIds.length;
             const photoFileId = movie.thumbnail || null;
 
-            const resultText = `✨ <b>${movie.title.toUpperCase()}</b>\n` +
+            const resultText = `✨ ${movie.title.toUpperCase()}\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
                 `📥 <b>Delivery:</b> Direct PM\n` +
@@ -657,9 +657,9 @@ module.exports = (bot) => {
 
             const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
 
-            const helpText = `💎 <b>MOVIE FILTER LIST</b>\n` +
+            const helpText = `💎 MOVIE FILTER LIST\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🚀 <b>Select a movie to get clips:</b>\n\n` +
+                `🚀 Select a movie to get clips:\n\n` +
                 `📊 <b>Page:</b> ${page + 1} / ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n` +
                 `🎬 <b>Catalog:</b> ${session.movieIds.length} Movies Available\n\n` +
                 `💡 <i>Clips are delivered directly to your PM for quality!</i>`;
