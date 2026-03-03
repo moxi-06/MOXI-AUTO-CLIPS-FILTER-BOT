@@ -341,12 +341,6 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // ── Send Clips as Albums (batches of 10) ──────────────────────
         let newMessageIds = [];
 
-        await ctx.api.editMessageText(
-            ctx.chat.id, waitMsgId,
-            `📤 <b>Delivering clips...</b>\n\n🎬 <i>${movie.title}</i>\n📂 ${movie.files?.length || movie.messageIds.length} clips\n\n<i>Please don't close this chat.</i>`,
-            { parse_mode: 'HTML' }
-        );
-
         const files = movie.files && movie.files.length > 0 ? movie.files : null;
 
         if (files) {

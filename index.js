@@ -179,6 +179,37 @@ async function bootstrap() {
         });
     }
 
+    // --- Bot Startup: Clean all rooms ---
+    async function cleanupAllRoomsOnStartup() {
+        try {
+            console.log('🧹 Cleaning all rooms on startup...');
+            const rooms = await Room.find({ isBusy: false });
+            
+            for (const room of rooms) {
+                if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+                    try {
+                        // Delete messages in batches
+                        for (let i = 0; i < room.lastMessageIds.length; i += 100) {
+                            try {
+                                await bot.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
+                            } catch (_) { }
+                        }
+                        console.log(`✅ Cleaned room ${room.roomId}`);
+                    } catch (e) {
+                        console.error(`❌ Failed to clean room ${room.roomId}:`, e.message);
+                    }
+                }
+            }
+            
+            // Reset all rooms
+            await Room.updateMany({}, { lastMessageIds: [], currentUserId: null, isBusy: false });
+            console.log('✅ All rooms reset and cleaned on startup');
+        } catch (error) {
+            console.error('❌ Startup cleanup error:', error.message);
+        }
+    }
+    cleanupAllRoomsOnStartup();
+
     // --- Automatic MongoDB Database Cleanup ---
     setInterval(async () => {
         try {
