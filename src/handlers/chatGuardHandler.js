@@ -142,9 +142,12 @@ module.exports = (bot) => {
 
             // Check if it's a bot command that mentions the bot itself (e.g., /filters@moxi_filters2_bot)
             const botUsername = process.env.BOT_USERNAME?.replace('@', '').toLowerCase();
-            const isBotCommand = text.startsWith('/') && text.toLowerCase().includes(botUsername);
+            const isBotCommand = text.startsWith('/') && botUsername && text.toLowerCase().includes(botUsername);
 
             if (isBotCommand) return next();
+
+            // Allow mentions of the bot itself
+            if (botUsername && text.toLowerCase().includes(botUsername)) return next();
 
             // 1. Link Detection (External URLs and Telegram Invites)
             const hasLink = /https?:\/\/[^\s]+/.test(text) || /t\.me\/(joinchat|\+)/.test(text);
@@ -158,7 +161,7 @@ module.exports = (bot) => {
             const hasBlacklist = blacklist.some(word => text.toLowerCase().includes(word));
 
             // 3. Bot/Channel Mentions (@usernames that are not the bot itself)
-            const hasForbiddenMention = /@\w+/.test(text) && (!botUsername || !text.toLowerCase().includes(botUsername));
+            const hasForbiddenMention = /@\w+/.test(text) && (!botUsername || (text.toLowerCase().includes(botUsername) === false));
 
             if (hasLink || hasBlacklist || hasForbiddenMention) {
                 try {

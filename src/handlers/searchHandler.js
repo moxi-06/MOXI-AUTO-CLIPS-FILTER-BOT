@@ -569,10 +569,7 @@ module.exports = (bot) => {
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
                     `👆 Tap below to get clips!`;
 
-                await ctx.answerCallbackQuery({ text: '✅ Found it!', show_alert: false });
-
                 if (photoFileId) {
-                    await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
                     await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
                 } else {
                     await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
@@ -612,7 +609,6 @@ module.exports = (bot) => {
                 `👆 Tap below to get clips!`;
 
             if (photoFileId) {
-                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
                 await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
             } else {
                 await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
@@ -649,7 +645,6 @@ module.exports = (bot) => {
                 `👆 Tap below to get clips!`;
 
             if (photoFileId) {
-                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
                 await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
             } else {
                 await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
