@@ -230,12 +230,12 @@ async function bootstrap() {
 
                 const sent = await bot.api.sendMessage(GROUP_ID, randomMsg, { parse_mode: 'HTML' });
 
-                // Auto-delete after 2 minutes
+                // Auto-delete after 1 hour
                 setTimeout(async () => {
                     try {
                         await bot.api.deleteMessage(GROUP_ID, sent.message_id);
                     } catch (_) { }
-                }, 2 * 60 * 1000);
+                }, 60 * 60 * 1000);
 
                 console.log('📢 Promotional message posted in group');
             } catch (error) {

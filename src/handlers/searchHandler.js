@@ -2,7 +2,7 @@ const { Movie, User, PaginationSession } = require('../database');
 const { cleanMovieName, encodeMovieLink, sendToLogChannel } = require('../utils/helpers');
 const { InlineKeyboard } = require('grammy');
 
-const ITEMS_PER_PAGE = 10;
+const ITEMS_PER_PAGE = 30;
 
 function getUserMention(ctx) {
     const user = ctx.from;
@@ -246,19 +246,17 @@ function buildFilterKeyboard(movies, page, total) {
 
     movies.forEach((m) => {
         const count = m.files?.length || m.messageIds.length;
-        // Premium Minimalist Style: ▸ TITLE (COUNT)
-        // Braille space (U+2800) used for left-alignment feeling
-        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})⠀`, `f_${m.title}`).row();
+        keyboard.text(`▸ ${m.title.toUpperCase()} (${count})`, `f_${m.title}`).row();
     });
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
 
     // Strictly vertical pagination
     if (page < totalPages - 1) {
-        keyboard.text('NEXT PAGE ›', `fp_${page + 1}`).row();
+        keyboard.text('Next ▶', `fp_${page + 1}`).row();
     }
     if (page > 0) {
-        keyboard.text('‹ PREVIOUS PAGE', `fp_${page - 1}`).row();
+        keyboard.text('◀ Prev', `fp_${page - 1}`).row();
     }
 
     return keyboard;
@@ -330,12 +328,26 @@ module.exports = (bot) => {
         const groupId = process.env.GROUP_ID;
         const isGroup = groupId && ctx.chat.id.toString() === groupId;
 
-        // 1. Handle Filter List Command (Works in Group + PM)
+        // 1. Handle Filter List Command (Group Only)
         if (isFiltersCommand) {
+            // If not in group, guide user to group
+            if (!isGroup) {
+                return ctx.reply(
+                    `👋 <b>Hey there!</b>\n\n` +
+                    `This bot works in the group - you need to search for movies there!\n\n` +
+                    `📝 <b>How to use:</b>\n` +
+                    `1️⃣ Join our group\n` +
+                    `2️⃣ Type any movie name\n` +
+                    `3️⃣ Get clips in your PM!\n\n` +
+                    `🎬 <b>Group Link:</b> ${process.env.GROUP_LINK || 'Ask admin for the group link'}`,
+                    { parse_mode: 'HTML' }
+                );
+            }
+
             const allMovies = await Movie.find().select('_id');
             if (allMovies.length === 0) return ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
 
-            // Singleton Clean-up (Delete old list in same chat)
+            // Singleton Clean-Up (Delete old list in same chat)
             const existingSession = await PaginationSession.findOne({ chatId: String(ctx.chat.id) });
             if (existingSession && existingSession.lastMessageId) {
                 try {
@@ -348,12 +360,12 @@ module.exports = (bot) => {
             const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.equals(id)));
 
             const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length);
-            const helpText = `💎 MOVIE FILTER LIST\n` +
+            const helpText = `🎬 Available Movie Clips\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🚀 Select a movie to get clips:\n\n` +
-                `📊 <b>Page:</b> 1 / ${Math.ceil(shuffledIds.length / ITEMS_PER_PAGE)}\n` +
-                `🎬 <b>Catalog:</b> ${shuffledIds.length} Movies Available\n\n` +
-                `💡 <i>Clips are delivered directly to your PM for quality!</i>`;
+                `Tap a movie below to get clips sent to your PM!\n\n` +
+                `📄 Total: ${shuffledIds.length} movies\n` +
+                `📑 Page: ${1} of ${Math.ceil(shuffledIds.length / ITEMS_PER_PAGE)}\n\n` +
+                `✨ Works in PM only - clips open in your private chat!`;
 
             const sent = await ctx.reply(helpText, {
                 parse_mode: 'HTML',
@@ -374,7 +386,16 @@ module.exports = (bot) => {
         }
 
         // 2. Handle Movie Title Search (ONLY in Group)
-        if (!isGroup) return next();
+        if (!isGroup) {
+            // Guide user to type in group
+            return ctx.reply(
+                `👋 <b>Use me in the group!</b>\n\n` +
+                `Search for movies right in the group chat - that's where the magic happens!\n\n` +
+                `📝 <b>Just type a movie name in the group</b> and I'll send clips to your PM.\n\n` +
+                `🎬 <b>Group Link:</b> ${process.env.GROUP_LINK || 'Ask admin for the group link'}`,
+                { parse_mode: 'HTML' }
+            );
+        }
 
         // Skip old messages in group to prevent flood on restart
         if (ctx.message.date * 1000 < global.botStartedAt) return;
@@ -658,12 +679,12 @@ module.exports = (bot) => {
 
             const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
 
-            const helpText = `💎 MOVIE FILTER LIST\n` +
+            const helpText = `🎬 Available Movie Clips\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🚀 Select a movie to get clips:\n\n` +
-                `📊 <b>Page:</b> ${page + 1} / ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n` +
-                `🎬 <b>Catalog:</b> ${session.movieIds.length} Movies Available\n\n` +
-                `💡 <i>Clips are delivered directly to your PM for quality!</i>`;
+                `Tap a movie below to get clips sent to your PM!\n\n` +
+                `📄 Total: ${session.movieIds.length} movies\n` +
+                `📑 Page: ${page + 1} of ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n\n` +
+                `✨ Works in PM only - clips open in your private chat!`;
 
             await ctx.answerCallbackQuery();
             await ctx.editMessageText(helpText, {

@@ -314,6 +314,30 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             }
         }
 
+        // ── Create Invite Link Immediately (before copying files) ──────────────────────
+        const expireDate = Math.floor(Date.now() / 1000) + 2 * 60 * 60;
+        const invite = await ctx.api.createChatInviteLink(room.roomId, {
+            member_limit: 1,
+            expire_date: expireDate,
+            name: `Delivery: ${movie.title.substring(0, 20)}`
+        });
+
+        // Send the invite link immediately so user can join and wait
+        await ctx.api.editMessageText(
+            ctx.chat.id, waitMsgId,
+            `📤 <b>Preparing your room...</b>\n\n` +
+            `🎬 <i>${movie.title}</i>\n` +
+            `📂 ${movie.files?.length || movie.messageIds.length} clips\n\n` +
+            `⏳ <i>Joining now lets you watch while files copy...</i>\n\n` +
+            `🚀 <b>Your Room:</b>`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🚪 Join Room Now', url: invite.invite_link }]]
+                }
+            }
+        );
+
         // ── Send Clips as Albums (batches of 10) ──────────────────────
         let newMessageIds = [];
 
@@ -394,14 +418,6 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             }
         }
 
-        // ── Create Invite Link (2hr, 1 member) ──────────────────────
-        const expireDate = Math.floor(Date.now() / 1000) + 2 * 60 * 60;
-        const invite = await ctx.api.createChatInviteLink(room.roomId, {
-            member_limit: 1,
-            expire_date: expireDate,
-            name: `Delivery: ${movie.title.substring(0, 20)}`
-        });
-
         // ── Save Room State ──────────────────────────────────────────
         room.currentUserId = ctx.from.id.toString();
         room.lastMessageIds = newMessageIds;
@@ -412,10 +428,10 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // ── Send Delivery Card ───────────────────────────────────────
         await ctx.api.editMessageText(
             ctx.chat.id, waitMsgId,
-            `✅ <b>COMPLETELY READY!</b>\n` +
+            `✅ <b>ALL CLIPS COPIED!</b>\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `🎬 <b>Movie:</b> <code>${movie.title}</code>\n` +
-            `📂 <b>Clips:</b> ${movie.messageIds.length} Files\n\n` +
+            `📂 <b>Clips:</b> ${newMessageIds.length} Files\n\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `⚠️ <b>Note:</b>\n` +
             `• Access expires in <b>2 hours</b>\n` +
@@ -424,7 +440,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             {
                 parse_mode: 'HTML',
                 reply_markup: {
-                    inline_keyboard: [[{ text: '🚪 Get My Clips  →', url: invite.invite_link }]]
+                    inline_keyboard: [[{ text: '🚪 Open My Clips  →', url: invite.invite_link }]]
                 }
             }
         );
