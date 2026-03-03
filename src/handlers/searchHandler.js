@@ -4,6 +4,17 @@ const { InlineKeyboard } = require('grammy');
 
 const ITEMS_PER_PAGE = 30;
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const deleteTriggerMessage = async (ctx, ms = 30 * 60 * 1000) => {
+    await sleep(ms);
+    try { 
+        if (ctx.message) {
+            await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id); 
+        }
+    } catch (_) { }
+};
+
 function getUserMention(ctx) {
     const user = ctx.from;
     if (user.username) {
@@ -328,16 +339,20 @@ module.exports = (bot) => {
         const isGroup = groupId && ctx.chat.id.toString() === groupId;
         
         if (!isGroup) {
-            return ctx.reply(
+            const reply = await ctx.reply(
                 `👋 <b>Use /random in the group!</b>\n\n` +
                 `Join our group and type /random to discover movies!`,
                 { parse_mode: 'HTML' }
             );
+            deleteTriggerMessage(ctx);
+            return;
         }
 
         const movies = await Movie.find();
         if (movies.length === 0) {
-            return ctx.reply('📭 No movies available yet!');
+            const reply = await ctx.reply('📭 No movies available yet!');
+            deleteTriggerMessage(ctx);
+            return;
         }
 
         const randomMovie = movies[Math.floor(Math.random() * movies.length)];
@@ -374,6 +389,44 @@ module.exports = (bot) => {
         }
     });
 
+    // Trending movies command
+    bot.command('trending', async (ctx) => {
+        const groupId = process.env.GROUP_ID;
+        const isGroup = groupId && ctx.chat.id.toString() === groupId;
+        
+        if (!isGroup) {
+            const reply = await ctx.reply(
+                `👋 <b>Use /trending in the group!</b>\n\n` +
+                `Join our group to see what's trending!`,
+                { parse_mode: 'HTML' }
+            );
+            deleteTriggerMessage(ctx);
+            return;
+        }
+
+        const topMovies = await Movie.find().sort({ requests: -1 }).limit(5);
+        
+        if (topMovies.length === 0) {
+            const reply = await ctx.reply('📭 No movies available yet!');
+            deleteTriggerMessage(ctx);
+            return;
+        }
+
+        let trendingText = `🔥 <b>TRENDING MOVIES</b>\n`;
+        trendingText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        topMovies.forEach((m, i) => {
+            const clipCount = m.files?.length || m.messageIds.length;
+            trendingText += `${i + 1}. <b>${m.title}</b> (${m.requests} requests)\n`;
+            trendingText += `   📂 ${clipCount} clips\n\n`;
+        });
+        
+        trendingText += `━━━━━━━━━━━━━━━━━━━━\n`;
+        trendingText += `💡 Tap any movie to get clips in PM!`;
+
+        await ctx.reply(trendingText, { parse_mode: 'HTML' });
+    });
+
     bot.on('message:text', async (ctx, next) => {
         const incomingText = (ctx.message.text || '').toLowerCase();
         if (!incomingText || incomingText.length < 2) return next();
@@ -404,7 +457,11 @@ module.exports = (bot) => {
             }
 
             const allMovies = await Movie.find().select('_id');
-            if (allMovies.length === 0) return ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
+            if (allMovies.length === 0) {
+                const reply = await ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
+                deleteTriggerMessage(ctx);
+                return;
+            }
 
             // Singleton Clean-Up (Delete old list in same chat)
             const existingSession = await PaginationSession.findOne({ chatId: String(ctx.chat.id) });
@@ -447,13 +504,15 @@ module.exports = (bot) => {
         // 2. Handle Movie Title Search (ONLY in Group)
         if (!isGroup) {
             // Guide user to type in group
-            return ctx.reply(
+            const reply = await ctx.reply(
                 `👋 <b>Use me in the group!</b>\n\n` +
                 `Search for movies right in the group chat - that's where the magic happens!\n\n` +
                 `📝 <b>Just type a movie name in the group</b> and I'll send clips to your PM.\n\n` +
                 `🎬 <b>Group Link:</b> ${process.env.GROUP_LINK || 'Ask admin for the group link'}`,
                 { parse_mode: 'HTML' }
             );
+            deleteTriggerMessage(ctx);
+            return;
         }
 
         // Skip old messages in group to prevent flood on restart

@@ -22,6 +22,9 @@ module.exports = (bot) => {
         if (status === 'member' || status === 'administrator') {
             const user = ctx.myChatMember.new_chat_member.user;
 
+            // Log new group member
+            await sendToLogChannel(bot, `👥 <b>New Group Member</b>\n\n👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n📅 Joined: ${new Date().toLocaleString()}\n\n#newmember 👋`);
+
             try {
                 const welcomeKeyboard = new (require('grammy')).InlineKeyboard()
                     .text('📖 Step-by-Step Guide', 'welcome_guide')

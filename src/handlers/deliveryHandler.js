@@ -9,9 +9,19 @@ function getUserNameForLog(user) {
 }
 
 // Auto-delete a bot message after N milliseconds
-const autoDelete = async (api, chatId, messageId, ms = 10 * 60 * 1000) => {
+const autoDelete = async (api, chatId, messageId, ms = 30 * 60 * 1000) => {
     await sleep(ms);
     try { await api.deleteMessage(chatId, messageId); } catch (_) { }
+};
+
+// Delete command message that triggered the bot
+const deleteTriggerMessage = async (ctx, ms = 30 * 60 * 1000) => {
+    await sleep(ms);
+    try {
+        if (ctx.message) {
+            await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id);
+        }
+    } catch (_) { }
 };
 
 // ────────────────────────────────────────────────────────────────────
@@ -35,15 +45,89 @@ async function checkForceSub(ctx) {
 // Main Handler
 // ────────────────────────────────────────────────────────────────────
 module.exports = (bot) => {
+    // Admin contact command - allows users to message admin directly
+    bot.command('contact', async (ctx) => {
+        if (ctx.chat.type !== 'private') return;
+
+        const adminId = process.env.ADMIN_ID;
+        const user = ctx.from;
+        const messageText = ctx.message.text.replace('/contact', '').trim();
+
+        if (!messageText) {
+            return ctx.reply(
+                `💬 <b>Contact Admin</b>\n\n` +
+                `Use: /contact <your message>\n\n` +
+                `Example: /contact Can you add movie X?`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        // Send message to admin
+        try {
+            await bot.api.sendMessage(
+                adminId,
+                `📩 <b>User Message</b>\n\n` +
+                `👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n` +
+                `📝 Message: ${messageText}\n\n` +
+                `🔗 Reply to this message to reply back!`,
+                { parse_mode: 'HTML' }
+            );
+
+            ctx.reply(
+                `✅ <b>Message Sent!</b>\n\nYour message has been forwarded to admin.\n\n💬 You can reply again anytime with /contact <message>`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {
+            ctx.reply(`❌ Could not send message to admin. Please try again later.`);
+        }
+    });
+
+    // Handle replies from admin to users
+    bot.on('message::is_not_command', async (ctx) => {
+        if (ctx.chat.type !== 'private') return;
+
+        const adminId = process.env.ADMIN_ID;
+
+        // Only admin can reply to users through this
+        if (ctx.from.id.toString() !== adminId.toString()) return;
+
+        // Check if this is a reply to admin's message
+        if (!ctx.message.reply_to_message) return;
+
+        const replyText = ctx.message.reply_to_message.text || '';
+
+        // Extract user ID from the original message
+        const userIdMatch = replyText.match(/\(code\)([0-9]+)\(\/code\)/);
+        if (!userIdMatch) return;
+
+        const userId = parseInt(userIdMatch[1]);
+
+        try {
+            await bot.api.sendMessage(
+                userId,
+                `💬 <b>Admin Reply</b>\n\n${ctx.message.text}`,
+                { parse_mode: 'HTML' }
+            );
+            ctx.reply('✅ Reply sent to user!');
+        } catch (e) {
+            ctx.reply('❌ Could not send reply to user.');
+        }
+    });
+
     bot.command('start', async (ctx, next) => {
         if (ctx.chat.type !== 'private') return next();
 
-        // Save user to DB
-        await User.findOneAndUpdate(
+        // Save user to DB and check if new
+        const user = await User.findOneAndUpdate(
             { userId: ctx.from.id },
             { $setOnInsert: { userId: ctx.from.id, joinedAt: new Date() } },
             { upsert: true, returnDocument: 'after' }
         );
+
+        // Log new user
+        if (user.joinedAt && Date.now() - new Date(user.joinedAt).getTime() < 5000) {
+            await sendToLogChannel(bot, `👋 <b>New User Started Bot</b>\n\n👤 User: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\n🌐 Language: ${ctx.from.language_code || 'unknown'}`);
+        }
 
         const payload = ctx.match;
         let isVerified = false;
@@ -76,6 +160,7 @@ module.exports = (bot) => {
                 { parse_mode: 'HTML', disable_web_page_preview: true }
             );
             autoDelete(ctx.api, ctx.chat.id, welcome.message_id);
+            deleteTriggerMessage(ctx);
             return;
         }
 
@@ -111,6 +196,7 @@ module.exports = (bot) => {
             if (ctx.from.id.toString() !== userId) {
                 const e = await ctx.reply('❌ This token link belongs to another user.');
                 autoDelete(ctx.api, ctx.chat.id, e.message_id);
+                deleteTriggerMessage(ctx);
                 await releaseLock();
                 return;
             }
@@ -136,6 +222,7 @@ module.exports = (bot) => {
         if (!movieName) {
             const e = await ctx.reply('❌ <b>Link Expired!</b>\n\nThis link is old. Please search again in our group! 👆');
             autoDelete(ctx.api, ctx.chat.id, e.message_id);
+            deleteTriggerMessage(ctx);
             await releaseLock();
             return;
         }
@@ -144,6 +231,7 @@ module.exports = (bot) => {
         if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
             const e = await ctx.reply('❌ <b>Clips Not Available!</b>\n\nThis content is removed. Please ask admin to add it! 😢');
             autoDelete(ctx.api, ctx.chat.id, e.message_id);
+            deleteTriggerMessage(ctx);
             await releaseLock();
             return;
         }
@@ -248,7 +336,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 ctx.chat.id, waitMsgId,
                 `📢 <b>One Last Step!</b>\n\n` +
                 `To receive your clips, you need to be a member of our main channel.\n\n` +
-                `<b>Why?</b> It keeps our community together and helps us keep this service free! 🙏\n\n` +
+                `<b>Why?</b> It keeps our community together and helps us keep in touch ! 🙏\n\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `1️⃣ Join the channel below\n` +
                 `2️⃣ Click "✅ Done!" to get your clips!`,
@@ -519,62 +607,65 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
 
     // Handle Force Sub "I've Joined" callback
     bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    
-    const encodedMovieTitle = ctx.match[1];
-    const movieTitle = decodeMovieLink(encodedMovieTitle);
-    
-    if (!movieTitle) {
-        return await ctx.editMessageText(
-            '❌ Link expired. Please search for the movie again in the group.',
-            { parse_mode: 'HTML' }
-        );
-    }
+        await ctx.answerCallbackQuery();
 
-    // Check if user joined channel
-    const isMember = await checkForceSub(ctx);
-    if (!isMember) {
-        const forceSubChannel = await getSetting('forceSubChannel', null);
-        let joinUrl = forceSubChannel;
-        if (forceSubChannel && !forceSubChannel.startsWith('http')) {
-            try {
-                const chatInfo = await ctx.api.getChat(forceSubChannel);
-                joinUrl = chatInfo.invite_link || `https://t.me/${forceSubChannel.replace('@', '')}`;
-            } catch (_) {
-                joinUrl = `https://t.me/${forceSubChannel.replace('@', '')}`;
-            }
+        const encodedMovieTitle = ctx.match[1];
+        const movieTitle = decodeMovieLink(encodedMovieTitle);
+
+        if (!movieTitle) {
+            return await ctx.editMessageText(
+                '❌ Link expired. Please search for the movie again in the group.',
+                { parse_mode: 'HTML' }
+            );
         }
-        
-        return await ctx.editMessageText(
-            `📢 <b>You haven't joined yet!</b>\n\n` +
-            `Please join the channel first, then tap the button again.`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '📢 Join Channel', url: joinUrl }],
-                        [{ text: '✅ I\'ve Joined - Check Now', callback_data: `fs_${encodedMovieTitle}` }]
-                    ]
+
+        // Check if user joined channel
+        const isMember = await checkForceSub(ctx);
+        if (!isMember) {
+            const forceSubChannel = await getSetting('forceSubChannel', null);
+            let joinUrl = forceSubChannel;
+            if (forceSubChannel && !forceSubChannel.startsWith('http')) {
+                try {
+                    const chatInfo = await ctx.api.getChat(forceSubChannel);
+                    joinUrl = chatInfo.invite_link || `https://t.me/${forceSubChannel.replace('@', '')}`;
+                } catch (_) {
+                    joinUrl = `https://t.me/${forceSubChannel.replace('@', '')}`;
                 }
             }
-        );
-    }
 
-    // User joined - deliver movie
-    const movie = await Movie.findOne({ title: movieTitle });
-    if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
-        return await ctx.editMessageText(
-            '❌ Clips not available anymore. Please search for another movie.',
+            return await ctx.editMessageText(
+                `📢 <b>You haven't joined yet!</b>\n\n` +
+                `Please join the channel first, then tap the button again.`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '📢 Join Channel', url: joinUrl }],
+                            [{ text: '✅ I\'ve Joined - Check Now', callback_data: `fs_${encodedMovieTitle}` }]
+                        ]
+                    }
+                }
+            );
+        }
+
+        // User joined - deliver movie
+        const movie = await Movie.findOne({ title: movieTitle });
+        if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
+            return await ctx.editMessageText(
+                '❌ Clips not available anymore. Please search for another movie.',
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        // Log force sub verified
+        await sendToLogChannel(bot, `✅ <b>Force Sub Verified</b>\n\n👤 User: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\n🎬 Movie: <i>${movie.title}</i>\n\n#verified 📢`);
+
+        await ctx.editMessageText(
+            `✅ <b>Welcome back!</b>\n\n⏳ Preparing your clips...`,
             { parse_mode: 'HTML' }
         );
-    }
 
-    await ctx.editMessageText(
-        `✅ <b>Welcome back!</b>\n\n⏳ Preparing your clips...`,
-        { parse_mode: 'HTML' }
-    );
-
-    // Trigger delivery
-    deliverMovie(ctx, bot, movie, ctx.callbackQuery.message.message_id).catch(e => console.error('Delivery Error:', e));
+        // Trigger delivery
+        deliverMovie(ctx, bot, movie, ctx.callbackQuery.message.message_id).catch(e => console.error('Delivery Error:', e));
     });
 };
