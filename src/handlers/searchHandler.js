@@ -322,6 +322,9 @@ module.exports = (bot) => {
         const incomingText = (ctx.message.text || '').toLowerCase();
         if (!incomingText || incomingText.length < 2) return next();
 
+        // Skip /start command - let deliveryHandler handle it
+        if (incomingText.startsWith('/start')) return next();
+
         const keywords = ['/filters', '/filter', 'filters', 'filter', 'clips', 'tamil', 'movie', 'movies', 'list'];
         const isFiltersCommand = keywords.includes(incomingText) || incomingText === 'list filters';
 
