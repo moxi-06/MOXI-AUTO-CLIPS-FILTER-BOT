@@ -469,18 +469,22 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 { upsert: true, returnDocument: 'after' }
             );
 
-            // Check if user earned a new badge (video editing themed)
+            // Check if user earned a new badge (Moxi community themed)
             let newBadge = null;
-            if (user.downloadCount >= 3 && !user.badges.includes('✂️ Pro Cutter')) {
-                newBadge = '✂️ Pro Cutter';
+            if (user.downloadCount >= 5 && !user.badges.includes('✨ MOXI MEMBER')) {
+                newBadge = '✨ MOXI MEMBER';
                 user.badges.push(newBadge);
                 await user.save();
-            } else if (user.downloadCount >= 10 && !user.badges.includes('💎 Diamond Editor')) {
-                newBadge = '💎 Diamond Editor';
+            } else if (user.downloadCount >= 15 && !user.badges.includes('💫 MOXI PRO')) {
+                newBadge = '💫 MOXI PRO';
                 user.badges.push(newBadge);
                 await user.save();
-            } else if (user.downloadCount >= 20 && !user.badges.includes('👑 Editor King 👑')) {
-                newBadge = '👑 Editor King 👑';
+            } else if (user.downloadCount >= 30 && !user.badges.includes('⚡ MOXI STAR')) {
+                newBadge = '⚡ MOXI STAR';
+                user.badges.push(newBadge);
+                await user.save();
+            } else if (user.downloadCount >= 50 && !user.badges.includes('🔥 MOXI LEGEND')) {
+                newBadge = '🔥 MOXI LEGEND';
                 user.badges.push(newBadge);
                 await user.save();
             }
@@ -490,7 +494,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 try {
                     await ctx.api.sendMessage(
                         ctx.from.id,
-                        `🎉 <b>Congratulations!</b>\n\nYou earned a new badge: <b>${newBadge}</b>\n\nKeep using the bot to unlock more!`,
+                        `🎉 <b>MOXI BADGE UNLOCKED!</b>\n\nYou earned: <b>${newBadge}</b>\n\nKeep using Moxi to level up! 🚀`,
                         { parse_mode: 'HTML' }
                     );
                 } catch (_) { }

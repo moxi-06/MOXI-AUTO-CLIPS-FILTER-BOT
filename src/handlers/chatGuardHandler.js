@@ -134,20 +134,29 @@ module.exports = (bot) => {
                 return next();
             }
 
-            const userId = ctx.from.id;
             const text = ctx.message.text || ctx.message.caption || '';
-            const isAdmin = ['administrator', 'creator'].includes((await ctx.getChatMember(userId)).status);
+            const userId = ctx.from.id;
 
-            if (isAdmin) return next();
+            // Check if admin FIRST - before anything else
+            try {
+                const chatMember = await ctx.getChatMember(userId);
+                if (chatMember && ['administrator', 'creator'].includes(chatMember.status)) {
+                    return next(); // Admin is allowed everything
+                }
+            } catch (e) {
+                console.log('[ChatGuard] Could not check admin status:', e.message);
+            }
 
-            // Check if it's a bot command that mentions the bot itself (e.g., /filters@moxi_filters2_bot)
-            const botUsername = process.env.BOT_USERNAME?.replace('@', '').toLowerCase();
-            const isBotCommand = text.startsWith('/') && botUsername && text.toLowerCase().includes(botUsername);
-
-            if (isBotCommand) return next();
+            // Allow ALL bot commands (any command starting with /)
+            if (text.startsWith('/')) {
+                return next();
+            }
 
             // Allow mentions of the bot itself
-            if (botUsername && text.toLowerCase().includes(botUsername)) return next();
+            const botUsername = process.env.BOT_USERNAME?.replace('@', '').toLowerCase();
+            if (botUsername && text.toLowerCase().includes(botUsername)) {
+                return next();
+            }
 
             // 1. Link Detection (External URLs and Telegram Invites)
             const hasLink = /https?:\/\/[^\s]+/.test(text) || /t\.me\/(joinchat|\+)/.test(text);
@@ -155,13 +164,12 @@ module.exports = (bot) => {
             // 2. Blacklisted Keywords
             const blacklist = [
                 'dm', 'msg me', 'buy', 'sell', 'adult', 'porn', 'sex', 'cheap',
-                'promotion', 'subscribe', 'join my', 'referral', 'earn money',
-                'botinvitelink', 'channelinvitelink', 'botusername'
+                'promotion', 'subscribe', 'join my', 'referral', 'earn money'
             ];
             const hasBlacklist = blacklist.some(word => text.toLowerCase().includes(word));
 
-            // 3. Bot/Channel Mentions (@usernames that are not the bot itself)
-            const hasForbiddenMention = /@\w+/.test(text) && (!botUsername || (text.toLowerCase().includes(botUsername) === false));
+            // 3. Other @mentions (not the bot)
+            const hasForbiddenMention = /@\w+/.test(text) && (!botUsername || !text.toLowerCase().includes(botUsername));
 
             if (hasLink || hasBlacklist || hasForbiddenMention) {
                 try {

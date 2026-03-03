@@ -251,10 +251,10 @@ async function bootstrap() {
                 }
 
                 const promoMessages = [
-                    `🎬 <b>Need clips?</b>\n\nJust type the movie name and I'll send clips to your PM! 🍿`,
-                    `✨ <b>Looking for clips?</b>\n\nSearch in group and get clips! 🚀`,
-                    `🎥 <b>Want latest clips?</b>\n\nType movie name and tap the link! 📲${topMoviesText}`,
-                    `🔥 <b>Quick Tip:</b>\n\nType any movie name and I'll deliver to your PM! 🎬`
+                    `🎬 <b>Need clips?</b>\n\nJust type the movie name and I'll send clips to your PM! 🍿\n\n💡 Or try <code>/random</code> for a surprise pick!`,
+                    `✨ <b>Looking for clips?</b>\n\nSearch in group and get clips! 🚀\n\n🎲 Not sure what to watch? Try <code>/random</code>!`,
+                    `🎥 <b>Want latest clips?</b>\n\nType movie name and tap the link! 📲\n\n🎲 Or use <code>/random</code> for a random movie pick!${topMoviesText}`,
+                    `🔥 <b>Quick Tip:</b>\n\nType any movie name and I'll deliver to your PM! 🎬\n\n🎲 <code>/random</code> - Get a random movie pick!`
                 ];
 
                 const randomMsg = promoMessages[Math.floor(Math.random() * promoMessages.length)];

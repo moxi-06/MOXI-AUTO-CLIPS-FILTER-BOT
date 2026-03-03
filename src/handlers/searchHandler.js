@@ -186,23 +186,23 @@ async function findSimilarByTypo(query) {
     return results.slice(0, 5);
 }
 
-// Get user badge based on activity (video editing themed)
+// Get user badge based on activity (Moxi community themed)
 function getUserBadge(user) {
-    if (user.downloadCount >= 20) return '👑 Editor King 👑';
-    if (user.downloadCount >= 10) return '💎 Diamond Editor';
-    if (user.downloadCount >= 3) return '✂️ Pro Cutter';
-    if (user.searchCount >= 5) return '🎬 Clip Hunter';
-    if (user.searchCount >= 1) return '🎞️ New Editor';
+    if (user.downloadCount >= 50) return '🔥 MOXI LEGEND';
+    if (user.downloadCount >= 30) return '⚡ MOXI STAR';
+    if (user.downloadCount >= 15) return '💫 MOXI PRO';
+    if (user.downloadCount >= 5) return '✨ MOXI MEMBER';
+    if (user.searchCount >= 1) return '🌟 MOXI NEWBIE';
     return null;
 }
 
 // Get badge icon for display
 function getBadgeIcon(downloadCount, searchCount) {
-    if (downloadCount >= 20) return '👑';
-    if (downloadCount >= 10) return '💎';
-    if (downloadCount >= 3) return '✂️';
-    if (searchCount >= 5) return '🎬';
-    if (searchCount >= 1) return '🎞️';
+    if (downloadCount >= 50) return '🔥';
+    if (downloadCount >= 30) return '⚡';
+    if (downloadCount >= 15) return '💫';
+    if (downloadCount >= 5) return '✨';
+    if (searchCount >= 1) return '🌟';
     return '';
 }
 
@@ -213,17 +213,21 @@ async function updateUserStats(userId, type) {
             { userId },
             {
                 $inc: type === 'search' ? { searchCount: 1 } : { downloadCount: 1 },
-                $set: { lastActive: new Date() }
+                $set: { lastActive: new Date() },
+                $setOnInsert: { badges: ['🌟 MOXI NEWBIE'] } // Welcome badge for new users
             },
             { upsert: true, returnDocument: 'after' }
         );
 
-        // Check for badge upgrade
-        const newBadge = getUserBadge(user);
-        if (newBadge && !user.badges.includes(newBadge)) {
-            user.badges.push(newBadge);
-            await user.save();
-            return newBadge;
+        // Check for badge upgrade (only if not a new user)
+        const isNewUser = user.searchCount === 1 && user.downloadCount === 0;
+        if (!isNewUser) {
+            const newBadge = getUserBadge(user);
+            if (newBadge && !user.badges.includes(newBadge)) {
+                user.badges.push(newBadge);
+                await user.save();
+                return newBadge;
+            }
         }
         return null;
     } catch (e) {
@@ -318,6 +322,58 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false) {
 }
 
 module.exports = (bot) => {
+    // Random movie command
+    bot.command('random', async (ctx) => {
+        const groupId = process.env.GROUP_ID;
+        const isGroup = groupId && ctx.chat.id.toString() === groupId;
+        
+        if (!isGroup) {
+            return ctx.reply(
+                `👋 <b>Use /random in the group!</b>\n\n` +
+                `Join our group and type /random to discover movies!`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        const movies = await Movie.find();
+        if (movies.length === 0) {
+            return ctx.reply('📭 No movies available yet!');
+        }
+
+        const randomMovie = movies[Math.floor(Math.random() * movies.length)];
+        
+        await updateUserStats(ctx.from.id, 'search');
+        randomMovie.requests += 1;
+        await randomMovie.save();
+
+        const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
+        const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(randomMovie.title)}`;
+        const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
+
+        const clipCount = randomMovie.files?.length || randomMovie.messageIds.length;
+        const photoFileId = randomMovie.thumbnail || null;
+
+        const resultText = `🎲 <b>RANDOM PICK FOR YOU!</b>\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `🎬 <b>${randomMovie.title}</b>\n` +
+            `📂 <b>Clips:</b> ${clipCount} Available\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `👆 Tap below to get clips in your PM!`;
+
+        if (photoFileId) {
+            await ctx.replyWithPhoto(photoFileId, {
+                caption: resultText,
+                reply_markup: keyboard,
+                parse_mode: 'HTML'
+            });
+        } else {
+            await ctx.reply(resultText, {
+                reply_markup: keyboard,
+                parse_mode: 'HTML'
+            });
+        }
+    });
+
     bot.on('message:text', async (ctx, next) => {
         const incomingText = (ctx.message.text || '').toLowerCase();
         if (!incomingText || incomingText.length < 2) return next();

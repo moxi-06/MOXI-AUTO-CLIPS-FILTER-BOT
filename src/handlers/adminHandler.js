@@ -664,6 +664,13 @@ module.exports = (bot) => {
         ctx.reply('🔄 Admin Override: All rooms have been forcefully marked as FREE in DB.');
     });
 
+    bot.command('resetstats', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await Movie.updateMany({}, { requests: 0 });
+        await User.updateMany({}, { searchCount: 0, downloadCount: 0, badges: [] });
+        ctx.reply('✅ All stats have been reset!\n\n• Movie request counts: 0\n• User search counts: 0\n• User download counts: 0\n• All badges: cleared');
+    });
+
     // --- Monetization Settings ---
     bot.command('settings', async (ctx) => {
         if (!isAdmin(ctx)) return;
