@@ -251,11 +251,38 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 `<b>Why?</b> It keeps our community together and helps us keep this service free! 🙏\n\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `1️⃣ Join the channel below\n` +
-                `2️⃣ Come back and search again — clips will be delivered instantly!`,
+                `2️⃣ Click "✅ Done!" to get your clips!`,
                 {
                     parse_mode: 'HTML',
                     reply_markup: {
-                        inline_keyboard: [[{ text: '📢 Join Channel  →', url: joinUrl }]]
+                        inline_keyboard: [
+                            [{ text: '📢 Join Channel  →', url: joinUrl }],
+                            [{ text: '✅ Done! Check Now', callback_data: `fs_${encodeMovieLink(movie.title)}` }]
+                        ]
+                    }
+                }
+            );
+            await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
+            return;
+        }
+            }
+
+            // Send message with callback button (no DB needed)
+            await ctx.api.editMessageText(
+                ctx.chat.id, waitMsgId,
+                `📢 <b>One Last Step!</b>\n\n` +
+                `To receive your clips, you need to be a member of our main channel.\n\n` +
+                `<b>Why?</b> It keeps our community together and helps us keep this service free! 🙏\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+                `1️⃣ Join the channel below\n` +
+                `2️⃣ Tap "I've Joined" button below`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [
+                            [{ text: '📢 Join Channel', url: joinUrl }],
+                            [{ text: '✅ I\'ve Joined - Check Now', callback_data: `fs_${encodeMovieLink(movie.title)}` }]
+                        ]
                     }
                 }
             );
@@ -266,14 +293,14 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // ── Assign Room ──────────────────────────────────────────────
         let room = await Room.findOneAndUpdate(
             { isBusy: false },
-            { isBusy: true },
+            { isBusy: true, lastUsed: new Date() },
             { returnDocument: 'after' }
         );
 
         if (!room) {
             room = await Room.findOneAndUpdate(
                 {},
-                { isBusy: true },
+                { isBusy: true, lastUsed: new Date() },
                 { sort: { lastUsed: 1 }, returnDocument: 'after' }
             );
         }
@@ -416,13 +443,24 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         room.currentUserId = ctx.from.id.toString();
         room.lastMessageIds = newMessageIds;
         room.lastUsed = new Date();
-        room.isBusy = false;
         await room.save();
+
+        // Free the room after 15 minutes grace period (so user can download clips)
+        setTimeout(async () => {
+            try {
+                room.isBusy = false;
+                room.currentUserId = null;
+                await room.save();
+                console.log(`✅ Room ${room.roomId} freed after grace period`);
+            } catch (e) {
+                console.error('Error freeing room:', e.message);
+            }
+        }, 20 * 60 * 1000); // 15 minutes
 
         // ── Send Delivery Card ───────────────────────────────────────
         await ctx.api.editMessageText(
             ctx.chat.id, waitMsgId,
-            `✅ <b>ALL CLIPS COPIED!</b>\n` +
+            `✅ <b>ALL CLIPS READY !</b>\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
             `🎬 <b>Movie:</b> <code>${movie.title}</code>\n` +
             `📂 <b>Clips:</b> ${newMessageIds.length} Files\n\n` +
@@ -430,7 +468,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             `⚠️ <b>Note:</b>\n` +
             `• Access expires in <b>2 hours</b>\n` +
             `• One-time entry only\n\n` +
-            `🚀 <i>Tap below to enter your room!</i>`,
+            `🚀 <i>CLIPS ARE UPLOADED HERE!</i>`,
             {
                 parse_mode: 'HTML',
                 reply_markup: {
@@ -499,3 +537,64 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         await User.findOneAndUpdate({ userId: ctx.from.id }, { isDelivering: false });
     }
 }
+
+// Handle Force Sub "I've Joined" callback
+bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    
+    const encodedMovieTitle = ctx.match[1];
+    const movieTitle = decodeMovieLink(encodedMovieTitle);
+    
+    if (!movieTitle) {
+        return await ctx.editMessageText(
+            '❌ Link expired. Please search for the movie again in the group.',
+            { parse_mode: 'HTML' }
+        );
+    }
+
+    // Check if user joined channel
+    const isMember = await checkForceSub(ctx);
+    if (!isMember) {
+        const forceSubChannel = await getSetting('forceSubChannel', null);
+        let joinUrl = forceSubChannel;
+        if (forceSubChannel && !forceSubChannel.startsWith('http')) {
+            try {
+                const chatInfo = await ctx.api.getChat(forceSubChannel);
+                joinUrl = chatInfo.invite_link || `https://t.me/${forceSubChannel.replace('@', '')}`;
+            } catch (_) {
+                joinUrl = `https://t.me/${forceSubChannel.replace('@', '')}`;
+            }
+        }
+        
+        return await ctx.editMessageText(
+            `📢 <b>You haven't joined yet!</b>\n\n` +
+            `Please join the channel first, then tap the button again.`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '📢 Join Channel', url: joinUrl }],
+                        [{ text: '✅ I\'ve Joined - Check Now', callback_data: `fs_${encodedMovieTitle}` }]
+                    ]
+                }
+            }
+        );
+    }
+
+    // User joined - deliver movie
+    const movie = await Movie.findOne({ title: movieTitle });
+    if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
+        return await ctx.editMessageText(
+            '❌ Clips not available anymore. Please search for another movie.',
+            { parse_mode: 'HTML' }
+        );
+    }
+
+    await ctx.editMessageText(
+        `✅ <b>Welcome back!</b>\n\n⏳ Preparing your clips...`,
+        { parse_mode: 'HTML' }
+    );
+
+    // Trigger delivery
+    deliverMovie(ctx, bot, movie, ctx.callbackQuery.message.message_id).catch(e => console.error('Delivery Error:', e));
+});

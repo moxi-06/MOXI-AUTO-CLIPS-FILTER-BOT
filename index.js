@@ -183,7 +183,7 @@ async function bootstrap() {
     async function cleanupAllRoomsOnStartup() {
         try {
             console.log('🧹 Cleaning all rooms on startup...');
-            const rooms = await Room.find({ isBusy: false });
+            const rooms = await Room.find();
             
             for (const room of rooms) {
                 if (room.lastMessageIds && room.lastMessageIds.length > 0) {
