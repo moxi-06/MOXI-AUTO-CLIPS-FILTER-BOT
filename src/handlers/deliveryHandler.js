@@ -512,10 +512,9 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
     } finally {
         await User.findOneAndUpdate({ userId: ctx.from.id }, { isDelivering: false });
     }
-}
 
-// Handle Force Sub "I've Joined" callback
-bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
+    // Handle Force Sub "I've Joined" callback
+    bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     
     const encodedMovieTitle = ctx.match[1];
@@ -573,4 +572,5 @@ bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
 
     // Trigger delivery
     deliverMovie(ctx, bot, movie, ctx.callbackQuery.message.message_id).catch(e => console.error('Delivery Error:', e));
-});
+    });
+};
