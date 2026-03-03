@@ -265,30 +265,6 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
             return;
         }
-            }
-
-            // Send message with callback button (no DB needed)
-            await ctx.api.editMessageText(
-                ctx.chat.id, waitMsgId,
-                `📢 <b>One Last Step!</b>\n\n` +
-                `To receive your clips, you need to be a member of our main channel.\n\n` +
-                `<b>Why?</b> It keeps our community together and helps us keep this service free! 🙏\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `1️⃣ Join the channel below\n` +
-                `2️⃣ Tap "I've Joined" button below`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '📢 Join Channel', url: joinUrl }],
-                            [{ text: '✅ I\'ve Joined - Check Now', callback_data: `fs_${encodeMovieLink(movie.title)}` }]
-                        ]
-                    }
-                }
-            );
-            await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
-            return;
-        }
 
         // ── Assign Room ──────────────────────────────────────────────
         let room = await Room.findOneAndUpdate(
