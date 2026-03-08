@@ -83,8 +83,9 @@ module.exports = (bot) => {
     });
 
     // Handle replies from admin to users
-    bot.on('message::is_not_command', async (ctx) => {
-        if (ctx.chat.type !== 'private') return;
+    bot.on('message:text', async (ctx, next) => {
+        if (ctx.message.text.startsWith('/')) return next();
+        if (ctx.chat.type !== 'private') return next();
 
         const adminId = process.env.ADMIN_ID;
 
