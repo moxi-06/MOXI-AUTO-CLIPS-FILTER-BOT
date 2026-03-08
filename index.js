@@ -11,7 +11,6 @@ const adminHandler = require('./src/handlers/adminHandler');
 const indexHandler = require('./src/handlers/indexHandler');
 const searchHandler = require('./src/handlers/searchHandler');
 const deliveryHandler = require('./src/handlers/deliveryHandler');
-const chatGuardHandler = require('./src/handlers/chatGuardHandler');
 
 // Global stats for live tracking
 global.todayStats = {
@@ -100,7 +99,6 @@ async function bootstrap() {
     }));
 
     // 3. Register route handlers
-    chatGuardHandler(bot);   // Protections (must run early)
     adminHandler(bot);       // Handles group, channel, and global bot commands
     indexHandler(bot);       // Listens in DB channel to map messages to movies
     searchHandler(bot);      // Listens in groups for movie title queries
@@ -184,7 +182,7 @@ async function bootstrap() {
         try {
             console.log('🧹 Cleaning all rooms on startup...');
             const rooms = await Room.find();
-            
+
             for (const room of rooms) {
                 if (room.lastMessageIds && room.lastMessageIds.length > 0) {
                     try {
@@ -200,7 +198,7 @@ async function bootstrap() {
                     }
                 }
             }
-            
+
             // Reset all rooms
             await Room.updateMany({}, { lastMessageIds: [], currentUserId: null, isBusy: false });
             console.log('✅ All rooms reset and cleaned on startup');
@@ -218,7 +216,7 @@ async function bootstrap() {
             const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
             const freedRooms = await Room.updateMany(
                 { isBusy: true, lastUsed: { $lte: sixHoursAgo } },
-                { isBusy: false, currentUserId: null, lastMessageIds: [] }
+                { isBusy: false }
             );
 
             console.log(`✅ Cleanup finished: Freed ${freedRooms.modifiedCount} stuck rooms.`);

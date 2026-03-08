@@ -523,9 +523,9 @@ module.exports = (bot) => {
         ctx.reply(`🧹 Cleaning room ${roomId}... manually...`);
         if (room.currentUserId) {
             try {
-                await ctx.api.banChatMember(roomId, room.currentUserId);
+                await ctx.api.banChatMember(roomId, Number(room.currentUserId));
                 await sleep(500);
-                await ctx.api.unbanChatMember(roomId, room.currentUserId);
+                await ctx.api.unbanChatMember(roomId, Number(room.currentUserId));
             } catch (e) { logError(e); }
         }
         if (room.lastMessageIds && room.lastMessageIds.length > 0) {

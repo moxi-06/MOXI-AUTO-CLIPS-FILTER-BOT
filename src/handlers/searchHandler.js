@@ -8,9 +8,9 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const deleteTriggerMessage = async (ctx, ms = 30 * 60 * 1000) => {
     await sleep(ms);
-    try { 
+    try {
         if (ctx.message) {
-            await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id); 
+            await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id);
         }
     } catch (_) { }
 };
@@ -123,7 +123,7 @@ async function findSimilarByTypo(query) {
     // Skip fuzzy for very short queries to avoid junk
     if (query.length < 3) return [];
 
-    const movies = await Movie.find();
+    const movies = await Movie.find().lean();
     const results = [];
     const q = query.toLowerCase();
     const qSoundex = soundex(q);
@@ -337,7 +337,7 @@ module.exports = (bot) => {
     bot.command('random', async (ctx) => {
         const groupId = process.env.GROUP_ID;
         const isGroup = groupId && ctx.chat.id.toString() === groupId;
-        
+
         if (!isGroup) {
             const reply = await ctx.reply(
                 `👋 <b>Use /random in the group!</b>\n\n` +
@@ -348,7 +348,7 @@ module.exports = (bot) => {
             return;
         }
 
-        const movies = await Movie.find();
+        const movies = await Movie.find().lean();
         if (movies.length === 0) {
             const reply = await ctx.reply('📭 No movies available yet!');
             deleteTriggerMessage(ctx);
@@ -356,10 +356,9 @@ module.exports = (bot) => {
         }
 
         const randomMovie = movies[Math.floor(Math.random() * movies.length)];
-        
+
         await updateUserStats(ctx.from.id, 'search');
-        randomMovie.requests += 1;
-        await randomMovie.save();
+        await Movie.updateOne({ _id: randomMovie._id }, { $inc: { requests: 1 } });
 
         const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
         const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(randomMovie.title)}`;
@@ -393,7 +392,7 @@ module.exports = (bot) => {
     bot.command('trending', async (ctx) => {
         const groupId = process.env.GROUP_ID;
         const isGroup = groupId && ctx.chat.id.toString() === groupId;
-        
+
         if (!isGroup) {
             const reply = await ctx.reply(
                 `👋 <b>Use /trending in the group!</b>\n\n` +
@@ -404,8 +403,8 @@ module.exports = (bot) => {
             return;
         }
 
-        const topMovies = await Movie.find().sort({ requests: -1 }).limit(5);
-        
+        const topMovies = await Movie.find().sort({ requests: -1 }).limit(5).lean();
+
         if (topMovies.length === 0) {
             const reply = await ctx.reply('📭 No movies available yet!');
             deleteTriggerMessage(ctx);
@@ -414,13 +413,13 @@ module.exports = (bot) => {
 
         let trendingText = `🔥 <b>TRENDING MOVIES</b>\n`;
         trendingText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
-        
+
         topMovies.forEach((m, i) => {
             const clipCount = m.files?.length || m.messageIds.length;
             trendingText += `${i + 1}. <b>${m.title}</b> (${m.requests} requests)\n`;
             trendingText += `   📂 ${clipCount} clips\n\n`;
         });
-        
+
         trendingText += `━━━━━━━━━━━━━━━━━━━━\n`;
         trendingText += `💡 Tap any movie to get clips in PM!`;
 
@@ -456,7 +455,7 @@ module.exports = (bot) => {
                 );
             }
 
-            const allMovies = await Movie.find().select('_id');
+            const allMovies = await Movie.find().select('_id').lean();
             if (allMovies.length === 0) {
                 const reply = await ctx.reply('📭 No movies in database yet!', { reply_parameters: { message_id: ctx.message.message_id } });
                 deleteTriggerMessage(ctx);
@@ -472,8 +471,8 @@ module.exports = (bot) => {
             }
 
             const shuffledIds = allMovies.map(m => m._id).sort(() => Math.random() - 0.5);
-            const pageMovies = await Movie.find({ _id: { $in: shuffledIds.slice(0, ITEMS_PER_PAGE) } });
-            const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.equals(id)));
+            const pageMovies = await Movie.find({ _id: { $in: shuffledIds.slice(0, ITEMS_PER_PAGE) } }).lean();
+            const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.toString() === id.toString()));
 
             const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length);
             const helpText = `🎬 Available Movie Clips\n` +
@@ -527,16 +526,18 @@ module.exports = (bot) => {
             // 1. Exact Match
             let movie = await Movie.findOne({ title: query });
 
+            let allMoviesLean = null;
+
             // 2. Spaceless Match
             if (!movie) {
-                const allMovies = await Movie.find();
-                movie = allMovies.find(m => matchesSpaceless(query, m.title));
+                allMoviesLean = await Movie.find().lean();
+                movie = allMoviesLean.find(m => matchesSpaceless(query, m.title));
             }
 
             // 3. Token Match
             if (!movie) {
-                const allMovies = await Movie.find();
-                movie = allMovies.find(m => matchesTokens(query, m.title));
+                if (!allMoviesLean) allMoviesLean = await Movie.find().lean();
+                movie = allMoviesLean.find(m => matchesTokens(query, m.title));
             }
 
             // 4. Smart Matching (Typo/Category)
@@ -583,7 +584,7 @@ module.exports = (bot) => {
                         { title: { $regex: query, $options: 'i' } },
                         { categories: { $regex: `\\b${query}\\b`, $options: 'i' } } // Word boundary for categories
                     ]
-                }).limit(5);
+                }).limit(5).lean();
 
                 if (fuzzyMovies.length === 1) {
                     movie = fuzzyMovies[0];

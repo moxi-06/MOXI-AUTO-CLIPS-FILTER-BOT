@@ -355,12 +355,24 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         }
 
         // ── Assign Room ──────────────────────────────────────────────
-        let room = await Room.findOneAndUpdate(
-            { isBusy: false },
-            { isBusy: true, lastUsed: new Date() },
-            { returnDocument: 'after' }
-        );
+        const freeRooms = await Room.find({ isBusy: false }).select('_id').lean();
+        let room = null;
 
+        if (freeRooms.length > 0) {
+            // Shuffle available free rooms to pick randomly
+            const shuffledRooms = freeRooms.sort(() => Math.random() - 0.5);
+            for (const r of shuffledRooms) {
+                // Try to claim the room (in case another promise claimed it first)
+                room = await Room.findOneAndUpdate(
+                    { _id: r._id, isBusy: false },
+                    { isBusy: true, lastUsed: new Date() },
+                    { returnDocument: 'after' }
+                );
+                if (room) break;
+            }
+        }
+
+        // If no free rooms left (or won by race conditions), pick the one used longest ago
         if (!room) {
             room = await Room.findOneAndUpdate(
                 {},
@@ -385,9 +397,9 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // ── Clean Room ──
         if (room.currentUserId) {
             try {
-                await ctx.api.banChatMember(room.roomId, room.currentUserId);
+                await ctx.api.banChatMember(room.roomId, Number(room.currentUserId));
                 await sleep(500);
-                await ctx.api.unbanChatMember(room.roomId, room.currentUserId);
+                await ctx.api.unbanChatMember(room.roomId, Number(room.currentUserId));
                 await sleep(300);
             } catch (e) {
                 if (!e.message.includes('can\'t remove chat owner') && !e.message.includes('not enough rights')) {
@@ -509,11 +521,12 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         room.lastUsed = new Date();
         await room.save();
 
-        // Free the room after 15 minutes grace period (so user can download clips)
+        // Free the room after 15 minutes grace period (so user can download clips).
+        // We do NOT clear currentUserId or lastMessageIds here, so the next
+        // delivery has the info it needs to ban the user and delete old messages.
         setTimeout(async () => {
             try {
                 room.isBusy = false;
-                room.currentUserId = null;
                 await room.save();
                 console.log(`✅ Room ${room.roomId} freed after grace period`);
             } catch (e) {
