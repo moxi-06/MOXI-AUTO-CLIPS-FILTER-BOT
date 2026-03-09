@@ -278,10 +278,12 @@ function buildFilterKeyboard(movies, page, total) {
 }
 
 // Helper to send a consistent movie result
-async function sendMovieResult(ctx, movie, bot, isAutoMatched = false) {
-    movie.requests += 1;
-    await movie.save();
+async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser = null) {
+    await Movie.updateOne({ _id: movie._id }, { $inc: { requests: 1 } });
     await updateUserStats(ctx.from.id, 'search');
+
+    const reqSource = reqUser || ctx.from;
+    const reqName = reqSource.first_name || reqSource.username || 'User';
 
     const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
     const encodedTitle = encodeMovieLink(movie.title);
@@ -293,6 +295,7 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false) {
 
     const resultText = (isAutoMatched ? `✨ SMART MATCH FOUND\n` : `✨ ${movie.title.toUpperCase()}\n`) +
         `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+        `👤 <b>Requested by:</b> <a href="tg://user?id=${reqSource.id}">${reqName}</a>\n\n` +
         `${isAutoMatched ? `🎬 <b>Movie:</b> ${movie.title}\n` : ''}` +
         `📂 <b>Clips:</b> ${clipCount} Available\n` +
         `📥 <b>Delivery:</b> Direct PM\n` +
@@ -378,12 +381,14 @@ module.exports = (bot) => {
             await ctx.replyWithPhoto(photoFileId, {
                 caption: resultText,
                 reply_markup: keyboard,
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                reply_parameters: { message_id: ctx.message.message_id }
             });
         } else {
             await ctx.reply(resultText, {
                 reply_markup: keyboard,
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                reply_parameters: { message_id: ctx.message.message_id }
             });
         }
     });
@@ -427,14 +432,28 @@ module.exports = (bot) => {
     });
 
     bot.on('message:text', async (ctx, next) => {
-        const incomingText = (ctx.message.text || '').toLowerCase();
-        if (!incomingText || incomingText.length < 2) return next();
+        let incomingText = (ctx.message.text || '').toLowerCase().trim();
 
-        // Skip /start command - let deliveryHandler handle it
-        if (incomingText.startsWith('/start')) return next();
+        // Strip @bot_username from the end of the command if it exists
+        if (ctx.me && ctx.me.username) {
+            const botTag = `@${ctx.me.username.toLowerCase()}`;
+            if (incomingText.endsWith(botTag)) {
+                incomingText = incomingText.replace(botTag, '');
+            }
+        }
+
+        if (!incomingText || incomingText.length < 2) return next();
 
         const keywords = ['/filters', '/filter', 'filters', 'filter', 'clips', 'tamil', 'movie', 'movies', 'list'];
         const isFiltersCommand = keywords.includes(incomingText) || incomingText === 'list filters';
+
+        // If it's still a command (starts with /), let other command handlers process it
+        if (incomingText.startsWith('/')) {
+            // But we intercept /filter and /filters manually here to show the list
+            if (!isFiltersCommand) {
+                return next(); // Ignore all other commands (like /start, /random, etc.)
+            }
+        }
 
         const groupId = process.env.GROUP_ID;
         const isGroup = groupId && ctx.chat.id.toString() === groupId;
