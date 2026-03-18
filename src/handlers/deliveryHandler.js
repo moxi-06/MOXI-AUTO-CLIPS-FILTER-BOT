@@ -240,12 +240,31 @@ module.exports = (bot) => {
         // ─── Check Monetization Mode ─────────────────────────────────
         const mode = await getSetting('mode', 'off');
 
+        const sendTutorialIfAny = async () => {
+            try {
+                const tutStr = await getSetting('tutorial');
+                if (!tutStr) return;
+                const tutData = JSON.parse(tutStr);
+                const captionOpts = { caption: '💡 <b>How to open the link:</b>', parse_mode: 'HTML' };
+                if (tutData.type === 'video') {
+                    await ctx.api.sendVideo(ctx.chat.id, tutData.fileId, captionOpts);
+                } else if (tutData.type === 'document') {
+                    await ctx.api.sendDocument(ctx.chat.id, tutData.fileId, captionOpts);
+                } else if (tutData.type === 'link') {
+                    await ctx.reply(`💡 <b>How to open the link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, { parse_mode: 'HTML', disable_web_page_preview: true });
+                }
+            } catch (e) { console.error('Error sending tutorial:', e.message); }
+        };
+
         if (mode === 'token') {
             const validToken = await hasValidToken(ctx.from.id);
             if (!validToken) {
                 const botUsername = process.env.BOT_USERNAME || ctx.me?.username || '';
                 const tokenStartUrl = `https://t.me/${botUsername}?start=token_${ctx.from.id}`;
                 const wrappedUrl = await wrapShortlink(tokenStartUrl);
+
+                await sendTutorialIfAny();
+
                 const msg = await ctx.reply(
                     `🎫 <b>GET ACCESS PASS</b>\n` +
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
@@ -277,6 +296,9 @@ module.exports = (bot) => {
         } else if (mode === 'shortlink' && !isVerified) {
             const botUsername = process.env.BOT_USERNAME || ctx.me?.username || '';
             const verifiedStart = `https://t.me/${botUsername}?start=v_${moviePayload}`;
+
+            await sendTutorialIfAny();
+
             const wrapMsg = await ctx.reply(
                 `🔗 <b>Preparing your link...</b>\n\n📽️ Movie: <b>${movie.title}</b>\n🎬 Clips: ${movie.files?.length || movie.messageIds.length}`,
                 { parse_mode: 'HTML' }

@@ -547,8 +547,23 @@ module.exports = (bot) => {
 
     bot.command('broadcast', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const msgText = ctx.match;
-        if (!msgText) return ctx.reply('❌ Usage: /broadcast [Your message here]');
+
+        let msgToBroadcast = null;
+
+        if (ctx.message.reply_to_message) {
+            msgToBroadcast = {
+                type: 'copy',
+                fromChatId: ctx.chat.id,
+                messageId: ctx.message.reply_to_message.message_id
+            };
+        } else if (ctx.match) {
+            msgToBroadcast = {
+                type: 'text',
+                text: ctx.match
+            };
+        } else {
+            return ctx.reply('❌ Usage: `/broadcast [text]` OR reply to any message (photo/video/etc) with `/broadcast`', { parse_mode: 'Markdown' });
+        }
 
         const users = await User.find();
         const keyboard = new InlineKeyboard()
@@ -558,14 +573,14 @@ module.exports = (bot) => {
         const sent = await ctx.reply(
             `📡 <b>BROADCAST PREVIEW</b>\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `📝 <b>Message:</b>\n${msgText}\n\n` +
+            `📝 <b>Type:</b> ${msgToBroadcast.type === 'copy' ? 'Forwarded Media/Message' : 'Text Message'}\n` +
             `👥 <b>Target:</b> ${users.length} users\n\n` +
             `⚠️ This will send to all users!`,
             { parse_mode: 'HTML', reply_markup: keyboard }
         );
 
         // Store pending broadcast
-        global.pendingBroadcast[ctx.from.id] = { text: msgText, users: users.length };
+        global.pendingBroadcast[ctx.from.id] = { msgData: msgToBroadcast, users: users.length };
     });
 
     // Broadcast confirmation handlers
@@ -601,7 +616,11 @@ module.exports = (bot) => {
 
         for (const user of users) {
             try {
-                await ctx.api.sendMessage(user.userId, pending.text, { parse_mode: 'HTML' });
+                if (pending.msgData.type === 'text') {
+                    await ctx.api.sendMessage(user.userId, pending.msgData.text, { parse_mode: 'HTML' });
+                } else if (pending.msgData.type === 'copy') {
+                    await ctx.api.copyMessage(user.userId, pending.msgData.fromChatId, pending.msgData.messageId);
+                }
                 successCount++;
                 await sleep(300);
             } catch (e) {
@@ -636,6 +655,40 @@ module.exports = (bot) => {
         delete global.pendingBroadcast[adminId];
         await ctx.answerCallbackQuery({ text: '❌ Broadcast cancelled', show_alert: false });
         await ctx.editMessageText('❌ <b>BROADCAST CANCELLED</b>', { parse_mode: 'HTML' });
+    });
+
+    bot.command('settutorial', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+
+        let tutorialData = null;
+
+        if (ctx.message.reply_to_message) {
+            if (ctx.message.reply_to_message.video) {
+                tutorialData = { type: 'video', fileId: ctx.message.reply_to_message.video.file_id };
+            } else if (ctx.message.reply_to_message.document) {
+                tutorialData = { type: 'document', fileId: ctx.message.reply_to_message.document.file_id };
+            } else if (ctx.message.reply_to_message.text) {
+                tutorialData = { type: 'link', text: ctx.message.reply_to_message.text };
+            }
+        } else if (ctx.match) {
+            if (ctx.match.toLowerCase() === 'off') {
+                await setSetting('tutorial', null);
+                return ctx.reply('✅ Tutorial video has been DISABLED.');
+            }
+            tutorialData = { type: 'link', text: ctx.match };
+        }
+
+        if (!tutorialData) {
+            return ctx.reply(
+                `❌ <b>Usage:</b>\n` +
+                `1. Reply to a video/message with <code>/settutorial</code>\n` +
+                `2. Or type <code>/settutorial [https://youtube.com/...]</code>\n` +
+                `3. To disable: <code>/settutorial off</code>`, { parse_mode: 'HTML' }
+            );
+        }
+
+        await setSetting('tutorial', JSON.stringify(tutorialData));
+        ctx.reply(`✅ Tutorial successfully set!`);
     });
 
     bot.command('maintenance', async (ctx) => {
