@@ -224,7 +224,13 @@ module.exports = (bot) => {
             .text('Page 3: Settings', 'help_3');
 
         await ctx.answerCallbackQuery();
-        await ctx.editMessageText(pages[page] + `\n\n⚠️ Showing Page ${page} of 3`, { parse_mode: 'HTML', reply_markup: keyboard });
+        try {
+            await ctx.editMessageText(pages[page] + `\n\n⚠️ Showing Page ${page} of 3`, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (e) {
+            if (!e.message.includes('message is not modified')) {
+                throw e;
+            }
+        }
     });
 
     // Public /todaystats - shows today's activity in group
@@ -1149,15 +1155,18 @@ module.exports = (bot) => {
         if (!isAdmin(ctx)) return;
         await ctx.answerCallbackQuery();
 
-        const msg = await ctx.editMessageText(
-            `⏳ <b>Checking users...</b>\n\nPlease wait while I check each user and clean blocked ones.`,
-            { parse_mode: 'HTML' }
-        );
+        try {
+            await ctx.editMessageText(
+                `⏳ <b>Checking users...</b>\n\nPlease wait while I check each user and clean blocked ones.`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {
+            if (!e.message.includes('message is not modified')) throw e;
+        }
 
         try {
             const allUsers = await User.find();
             let cleanedCount = 0;
-            let cleanedUsers = [];
             const fs = require('fs');
             const path = require('path');
 
@@ -1167,15 +1176,10 @@ module.exports = (bot) => {
                 } catch (e) {
                     if (e.message.includes('bot was blocked') || e.message.includes('user is deactivated')) {
                         cleanedCount++;
-                        cleanedUsers.push({
-                            userId: user.userId,
-                            reason: e.message.includes('blocked') ? 'bot blocked' : 'user deactivated',
-                            lastActive: user.lastActive
-                        });
                         await User.deleteOne({ _id: user._id });
-                        continue;
                     }
                 }
+                await sleep(100);
             }
 
             const remainingUsers = await User.find();
@@ -1188,32 +1192,37 @@ module.exports = (bot) => {
                 badges: u.badges || []
             }));
 
-            const jsonPath = path.join(__dirname, '../../users_export.json');
-            fs.writeFileSync(jsonPath, JSON.stringify(userData, null, 2));
+            const jsonContent = JSON.stringify(userData, null, 2);
+            const buffer = Buffer.from(jsonContent, 'utf-8');
+            const { InputFile } = require('grammy');
 
-            await ctx.editMessageText(
-                `✅ <b>User Cleanup Complete</b>\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `🗑️ <b>Removed:</b> ${cleanedCount} blocked users\n` +
-                `✅ <b>Remaining:</b> ${remainingUsers.length} users\n` +
-                `📄 <b>Exported:</b> users_export.json\n\n` +
-                `The JSON file contains all active users with their stats.`,
-                { parse_mode: 'HTML' }
-            );
+            try {
+                await ctx.editMessageText(
+                    `✅ <b>User Cleanup Complete</b>\n\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                    `🗑️ Removed: ${cleanedCount} blocked users\n` +
+                    `✅ Remaining: ${remainingUsers.length} users\n\n` +
+                    `Sending JSON file...`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                if (!e.message.includes('message is not modified')) throw e;
+            }
 
-            await ctx.reply(
-                `📄 <b>User List JSON</b>\n\nTotal users: ${remainingUsers.length}`,
-                { parse_mode: 'HTML' }
-            );
-
-            await ctx.api.sendDocument(ctx.from.id, jsonPath);
+            await ctx.api.sendDocument(ctx.from.id, new InputFile(buffer, 'users_export.json'), {
+                caption: `📄 User List - ${remainingUsers.length} users`
+            });
 
         } catch (error) {
             console.error('User cleanup error:', error);
-            await ctx.editMessageText(
-                `❌ <b>Error</b>\n\n${error.message}`,
-                { parse_mode: 'HTML' }
-            );
+            try {
+                await ctx.editMessageText(
+                    `❌ Error: ${error.message}`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                if (!e.message.includes('message is not modified')) throw e;
+            }
         }
     });
 
