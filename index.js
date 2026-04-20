@@ -11,6 +11,7 @@ const adminHandler = require('./src/handlers/adminHandler');
 const indexHandler = require('./src/handlers/indexHandler');
 const searchHandler = require('./src/handlers/searchHandler');
 const deliveryHandler = require('./src/handlers/deliveryHandler');
+const { sleep } = require('./src/utils/helpers');
 
 // Global stats for live tracking
 global.todayStats = {
@@ -208,22 +209,132 @@ async function bootstrap() {
     }
     cleanupAllRoomsOnStartup();
 
-    // --- Automatic MongoDB Database Cleanup ---
+    // --- Reusable Room Cleanup Function ---
+    async function cleanupFreeRooms() {
+        const adminId = process.env.ADMIN_ID;
+        let cleanupErrors = [];
+
+        try {
+            const rooms = await Room.find({ isBusy: false });
+
+            for (const room of rooms) {
+                try {
+                    // Delete old messages in the room
+                    if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+                        for (let i = 0; i < room.lastMessageIds.length; i += 100) {
+                            try {
+                                await bot.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
+                            } catch (e) {
+                                cleanupErrors.push(`Room ${room.roomId}: Failed to delete messages - ${e.message}`);
+                            }
+                        }
+                    }
+
+                    // Unban previous user if any (to clean up for next delivery)
+                    if (room.currentUserId) {
+                        try {
+                            await bot.api.unbanChatMember(room.roomId, Number(room.currentUserId));
+                        } catch (e) {
+                            cleanupErrors.push(`Room ${room.roomId}: Failed to unban user - ${e.message}`);
+                        }
+                    }
+
+                    // Reset the room
+                    room.lastMessageIds = [];
+                    room.currentUserId = null;
+                    await room.save();
+
+                    console.log(`✅ Cleaned room ${room.roomId}`);
+                } catch (e) {
+                    console.error(`❌ Failed to clean room ${room.roomId}:`, e.message);
+                    cleanupErrors.push(`Room ${room.roomId}: ${e.message}`);
+                }
+            }
+
+            // Notify admin if any errors occurred
+            if (cleanupErrors.length > 0 && adminId) {
+                try {
+                    await bot.api.sendMessage(
+                        adminId,
+                        `⚠️ <b>Room Cleanup Error</b>\n\n` +
+                        `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                        `Some rooms could not be cleaned:\n\n` +
+                        cleanupErrors.slice(0, 5).map(e => `• ${e}`).join('\n') +
+                        `\n\nPlease check manually using /rooms`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (_) { }
+            }
+
+            console.log(`✅ Room cleanup finished: ${rooms.length} rooms cleaned`);
+        } catch (error) {
+            console.error('❌ Room Cleanup Error:', error.message);
+            if (adminId) {
+                try {
+                    await bot.api.sendMessage(
+                        adminId,
+                        `⚠️ <b>Room Cleanup Failed</b>\n\nError: ${error.message}`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (_) { }
+            }
+        }
+    }
+
+    // --- Automatic Room Cleanup (every 15 minutes) ---
+    setInterval(async () => {
+        await cleanupFreeRooms();
+    }, 15 * 60 * 1000);
+
+    // --- Automatic stuck rooms release with cleanup (every 1 hour) ---
     setInterval(async () => {
         try {
-            console.log('🧹 Running background database cleanup for stuck rooms...');
+            console.log('🧹 Checking for stuck rooms...');
 
-            const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
-            const freedRooms = await Room.updateMany(
-                { isBusy: true, lastUsed: { $lte: sixHoursAgo } },
-                { isBusy: false }
-            );
+            // Find rooms that are busy but past 1 hour since last used
+            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+            const stuckRooms = await Room.find({ 
+                isBusy: true, 
+                lastUsed: { $lte: oneHourAgo } 
+            });
 
-            console.log(`✅ Cleanup finished: Freed ${freedRooms.modifiedCount} stuck rooms.`);
+            for (const room of stuckRooms) {
+                try {
+                    // Delete old messages
+                    if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+                        for (let i = 0; i < room.lastMessageIds.length; i += 100) {
+                            try {
+                                await bot.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
+                            } catch (_) { }
+                        }
+                    }
+
+                    // Ban and unban to remove user (if still in channel)
+                    if (room.currentUserId) {
+                        try {
+                            await bot.api.banChatMember(room.roomId, Number(room.currentUserId));
+                            await sleep(500);
+                            await bot.api.unbanChatMember(room.roomId, Number(room.currentUserId));
+                        } catch (_) { }
+                    }
+
+                    // Mark as free and reset
+                    room.isBusy = false;
+                    room.lastMessageIds = [];
+                    room.currentUserId = null;
+                    await room.save();
+
+                    console.log(`✅ Released & cleaned stuck room ${room.roomId}`);
+                } catch (e) {
+                    console.error(`❌ Failed to clean stuck room ${room.roomId}:`, e.message);
+                }
+            }
+
+            console.log(`✅ Stuck room cleanup finished: ${stuckRooms.length} rooms processed`);
         } catch (error) {
-            console.error('❌ DB Cleanup Error:', error.message);
+            console.error('❌ Stuck Rooms Error:', error.message);
         }
-    }, 24 * 60 * 60 * 1000);
+    }, 60 * 60 * 1000);
 
     // --- Group Auto-Promoter (Every 5 hours) with rate limiting ---
     const GROUP_ID = process.env.GROUP_ID;
@@ -256,6 +367,9 @@ async function bootstrap() {
                         await bot.api.deleteMessage(GROUP_ID, sent.message_id);
                     } catch (_) { }
                 }, 60 * 60 * 1000);
+
+                // Run room cleanup after promo message is sent
+                await cleanupFreeRooms();
 
                 console.log('📢 Promotional message posted in group');
             } catch (error) {

@@ -80,13 +80,16 @@ module.exports = (bot) => {
         helpText += `You tap button → Clips in PM!\n\n`;
 
         // USER COMMANDS
-        helpText += `📌 USER COMMANDS\n`;
+        helpText += `📌 AVAILABLE COMMANDS\n`;
         helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
         helpText += `/start - Start the bot\n`;
         helpText += `/help - Show this guide\n`;
         helpText += `/filters - Browse all movies\n`;
+        helpText += `/random - Get random movie\n`;
+        helpText += `/trending - See top movies\n`;
         helpText += `/myprofile - Your stats & badges\n`;
-        helpText += `/todaystats - Today's activity\n\n`;
+        helpText += `/todaystats - Today's activity\n`;
+        helpText += `/contact <msg> - Contact admin\n\n`;
 
         // TIPS
         helpText += `💡 TIPS\n`;
@@ -109,19 +112,49 @@ module.exports = (bot) => {
         if (isAdminUser) {
             helpText += `⚙️ ADMIN COMMANDS\n`;
             helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
+            helpText += `📊 STATS & ANALYTICS\n`;
+            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
             helpText += `/stats - Full dashboard\n`;
+            helpText += `/resetstats - Reset all stats\n`;
+            helpText += `/logs - View error logs\n\n`;
+            helpText += `🎬 MOVIE MANAGEMENT\n`;
+            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
             helpText += `/addmovie - Add new movie\n`;
             helpText += `/delmovie - Delete movie\n`;
+            helpText += `/rename - Rename movie\n`;
             helpText += `/thumb - Set thumbnail\n`;
-            helpText += `/broadcast - Send to all users\n`;
-            helpText += `/rooms - View room status\n`;
-            helpText += `/settings - Bot settings\n`;
-            helpText += `/maintenance - Toggle mode\n`;
-            helpText += `/resetbot - Reset all data\n\n`;
+            helpText += `/addcategory - Add categories\n\n`;
+            helpText += `🏠 ROOM MANAGEMENT\n`;
+            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            helpText += `/addroom - Add delivery room\n`;
+            helpText += `/rooms - View all rooms\n`;
+            helpText += `/cleanroom - Clean room (interactive)\n`;
+            helpText += `/restartrooms - Reset all rooms\n\n`;
+            helpText += `📡 BROADCASTING\n`;
+            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            helpText += `/broadcast - Send message to all users\n\n`;
+            helpText += `⚙️ SYSTEM SETTINGS\n`;
+            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            helpText += `/settings - View all settings\n`;
+            helpText += `/setmode - Set monetization mode\n`;
+            helpText += `/setshortlink - Set shortlink API\n`;
+            helpText += `/setapikey - Set API key\n`;
+            helpText += `/setforcesub - Set force subscribe\n`;
+            helpText += `/unsetforcesub - Remove force sub\n`;
+            helpText += `/settutorial - Set tutorial video\n`;
+            helpText += `/maintenance - Toggle maintenance\n\n`;
+            helpText += `🛠️ UTILITY\n`;
+            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+            helpText += `/top - Top searched movies\n`;
+            helpText += `/users - Clean blocked users & export JSON\n`;
+            helpText += `/resetbadges - Reset user badges\n`;
+            helpText += `/resetbot - Reset all data\n`;
+            helpText += `/unlock - Unlock stuck user\n`;
+            helpText += `/contact - Contact user\n\n`;
         }
 
         helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `Need help? Contact admin!`;
+        helpText += `Need help? Use /contact <message>`;
 
         await ctx.reply(helpText, { parse_mode: 'HTML' });
     });
@@ -514,31 +547,96 @@ module.exports = (bot) => {
         ctx.reply(text, { parse_mode: 'HTML' });
     });
 
+    // Interactive room cleanup - shows buttons for each room
     bot.command('cleanroom', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const roomId = ctx.match.trim();
-        const room = await Room.findOne({ roomId });
-        if (!room) return ctx.reply('❌ Room not found in pool. Use /rooms.');
 
-        ctx.reply(`🧹 Cleaning room ${roomId}... manually...`);
+        const rooms = await Room.find();
+        if (rooms.length === 0) return ctx.reply('❌ No rooms configured.');
+
+        const keyboard = new InlineKeyboard();
+        for (const room of rooms) {
+            const status = room.isBusy ? '🔴' : '🟢';
+            keyboard.text(`${status} ${room.roomId}`, `clean_${room.roomId}`).row();
+        }
+
+        await ctx.reply(
+            `🧹 <b>Select Room to Clean</b>\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `Tap a room to clean it:\n` +
+            `• Remove member (ban + unban)\n` +
+            `• Delete all files/messages\n` +
+            `• Mark as FREE\n\n` +
+            `⚠️ This may take time due to API limits`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Handle room clean button callback
+    bot.callbackQuery(/^clean_(.+)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const roomId = ctx.match[1];
+
+        await ctx.answerCallbackQuery();
+
+        const room = await Room.findOne({ roomId });
+        if (!room) return ctx.editMessageText(`❌ Room not found: ${roomId}`);
+
+        await ctx.editMessageText(
+            `🧹 <b>Cleaning Room...</b>\n\nRoom: <code>${roomId}</code>\n⏳ Please wait...`,
+            { parse_mode: 'HTML' }
+        );
+
+        let cleaned = false;
+        let errors = [];
+
+        // Step 1: Delete messages (with API limit handling)
+        if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+            try {
+                for (let i = 0; i < room.lastMessageIds.length; i += 100) {
+                    const chunk = room.lastMessageIds.slice(i, i + 100);
+                    try {
+                        await ctx.api.deleteMessages(roomId, chunk);
+                        await sleep(1000); // Wait 1 second between batches
+                    } catch (e) {
+                        errors.push(`Delete batch ${i}: ${e.message}`);
+                    }
+                }
+                cleaned = true;
+            } catch (e) {
+                errors.push(`Delete: ${e.message}`);
+            }
+        }
+
+        // Step 2: Remove member (ban + unban)
         if (room.currentUserId) {
             try {
                 await ctx.api.banChatMember(roomId, Number(room.currentUserId));
-                await sleep(500);
+                await sleep(1000);
                 await ctx.api.unbanChatMember(roomId, Number(room.currentUserId));
-            } catch (e) { logError(e); }
-        }
-        if (room.lastMessageIds && room.lastMessageIds.length > 0) {
-            try {
-                await ctx.api.deleteMessages(roomId, room.lastMessageIds);
-            } catch (e) { logError(e); }
+                await sleep(1000);
+                cleaned = true;
+            } catch (e) {
+                errors.push(`Ban/Unban: ${e.message}`);
+            }
         }
 
+        // Step 3: Reset room status
         room.isBusy = false;
         room.currentUserId = null;
         room.lastMessageIds = [];
         await room.save();
-        ctx.reply('✅ Cleaned successfully and marked as FREE.');
+
+        const errorMsg = errors.length > 0 ? `\n⚠️ Errors: ${errors.join(', ')}` : '';
+        await ctx.editMessageText(
+            `✅ <b>Room Cleaned</b>\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `Room: <code>${roomId}</code>\n` +
+            `🗑️ Messages: ${cleaned ? 'Deleted' : 'None'}\n` +
+            `👤 Member: ${room.currentUserId ? 'Removed' : 'None'}\n` +
+            `🟢 Status: FREE\n${errorMsg}`,
+            { parse_mode: 'HTML' }
+        );
     });
 
     // Bot Admin Tools
@@ -956,5 +1054,104 @@ module.exports = (bot) => {
         } catch (e) {
             ctx.reply(`❌ Error: ${e.message}`);
         }
+    });
+
+    // Users management - clean blocked users and export JSON
+    bot.command('users', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+
+        const keyboard = new InlineKeyboard()
+            .text('✅ Yes, Clean Blocked', 'users_clean_export')
+            .text('❌ Cancel', 'users_cancel');
+
+        await ctx.reply(
+            `👥 <b>User Management</b>\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `This will:\n` +
+            `1. Check all users for blocked status\n` +
+            `2. Remove blocked users from database\n` +
+            `3. Export clean user list as JSON\n\n` +
+            `⚠️ This may take a few minutes depending on user count.`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Confirm clean and export users
+    bot.callbackQuery('users_clean_export', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+
+        const msg = await ctx.editMessageText(
+            `⏳ <b>Checking users...</b>\n\nPlease wait while I check each user and clean blocked ones.`,
+            { parse_mode: 'HTML' }
+        );
+
+        try {
+            const allUsers = await User.find();
+            let cleanedCount = 0;
+            let cleanedUsers = [];
+            const fs = require('fs');
+            const path = require('path');
+
+            for (const user of allUsers) {
+                try {
+                    await ctx.api.sendChatAction(user.userId, 'typing');
+                } catch (e) {
+                    if (e.message.includes('bot was blocked') || e.message.includes('user is deactivated')) {
+                        cleanedCount++;
+                        cleanedUsers.push({
+                            userId: user.userId,
+                            reason: e.message.includes('blocked') ? 'bot blocked' : 'user deactivated',
+                            lastActive: user.lastActive
+                        });
+                        await User.deleteOne({ _id: user._id });
+                        continue;
+                    }
+                }
+            }
+
+            const remainingUsers = await User.find();
+            const userData = remainingUsers.map(u => ({
+                userId: u.userId,
+                joinedAt: u.joinedAt,
+                lastActive: u.lastActive,
+                searchCount: u.searchCount || 0,
+                downloadCount: u.downloadCount || 0,
+                badges: u.badges || []
+            }));
+
+            const jsonPath = path.join(__dirname, '../../users_export.json');
+            fs.writeFileSync(jsonPath, JSON.stringify(userData, null, 2));
+
+            await ctx.editMessageText(
+                `✅ <b>User Cleanup Complete</b>\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `🗑️ <b>Removed:</b> ${cleanedCount} blocked users\n` +
+                `✅ <b>Remaining:</b> ${remainingUsers.length} users\n` +
+                `📄 <b>Exported:</b> users_export.json\n\n` +
+                `The JSON file contains all active users with their stats.`,
+                { parse_mode: 'HTML' }
+            );
+
+            await ctx.reply(
+                `📄 <b>User List JSON</b>\n\nTotal users: ${remainingUsers.length}`,
+                { parse_mode: 'HTML' }
+            );
+
+            await ctx.api.sendDocument(ctx.from.id, jsonPath);
+
+        } catch (error) {
+            console.error('User cleanup error:', error);
+            await ctx.editMessageText(
+                `❌ <b>Error</b>\n\n${error.message}`,
+                { parse_mode: 'HTML' }
+            );
+        }
+    });
+
+    bot.callbackQuery('users_cancel', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        await ctx.editMessageText(`❌ <b>Cancelled</b>`, { parse_mode: 'HTML' });
     });
 };

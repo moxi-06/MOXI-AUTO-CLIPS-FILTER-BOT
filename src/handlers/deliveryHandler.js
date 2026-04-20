@@ -9,13 +9,13 @@ function getUserNameForLog(user) {
 }
 
 // Auto-delete a bot message after N milliseconds
-const autoDelete = async (api, chatId, messageId, ms = 30 * 60 * 1000) => {
+const autoDelete = async (api, chatId, messageId, ms = 10 * 60 * 1000) => {
     await sleep(ms);
     try { await api.deleteMessage(chatId, messageId); } catch (_) { }
 };
 
 // Delete command message that triggered the bot
-const deleteTriggerMessage = async (ctx, ms = 30 * 60 * 1000) => {
+const deleteTriggerMessage = async (ctx, ms = 10 * 60 * 1000) => {
     await sleep(ms);
     try {
         if (ctx.message) {
@@ -241,19 +241,27 @@ module.exports = (bot) => {
         const mode = await getSetting('mode', 'off');
 
         const sendTutorialIfAny = async () => {
+            let tutorialMsgId = null;
             try {
                 const tutStr = await getSetting('tutorial');
-                if (!tutStr) return;
+                if (!tutStr) return null;
                 const tutData = JSON.parse(tutStr);
                 const captionOpts = { caption: '💡 <b>How to open the link:</b>', parse_mode: 'HTML' };
                 if (tutData.type === 'video') {
-                    await ctx.api.sendVideo(ctx.chat.id, tutData.fileId, captionOpts);
+                    const sent = await ctx.api.sendVideo(ctx.chat.id, tutData.fileId, captionOpts);
+                    tutorialMsgId = sent.message_id;
                 } else if (tutData.type === 'document') {
-                    await ctx.api.sendDocument(ctx.chat.id, tutData.fileId, captionOpts);
+                    const sent = await ctx.api.sendDocument(ctx.chat.id, tutData.fileId, captionOpts);
+                    tutorialMsgId = sent.message_id;
                 } else if (tutData.type === 'link') {
-                    await ctx.reply(`💡 <b>How to open the link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, { parse_mode: 'HTML', disable_web_page_preview: true });
+                    const sent = await ctx.reply(`💡 <b>How to open the link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, { parse_mode: 'HTML', disable_web_page_preview: true });
+                    tutorialMsgId = sent.message_id;
+                }
+                if (tutorialMsgId) {
+                    autoDelete(ctx.api, ctx.chat.id, tutorialMsgId);
                 }
             } catch (e) { console.error('Error sending tutorial:', e.message); }
+            return tutorialMsgId;
         };
 
         if (mode === 'token') {
@@ -318,7 +326,7 @@ module.exports = (bot) => {
             );
             autoDelete(ctx.api, ctx.chat.id, wrapMsg.message_id);
             await releaseLock();
-            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\n\n#shortlink 📎`);
+            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\nLink: ${wrappedUrl}\n\n#shortlink 📎`);
             return;
         } else {
             const waitMsg = await ctx.reply(
@@ -544,18 +552,34 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         room.lastUsed = new Date();
         await room.save();
 
-        // Free the room after 15 minutes grace period (so user can download clips).
-        // We do NOT clear currentUserId or lastMessageIds here, so the next
-        // delivery has the info it needs to ban the user and delete old messages.
+        // Free the room after 1 hour grace period (so user can download clips) AND clean it
         setTimeout(async () => {
             try {
+                // Delete old messages
+                if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+                    try {
+                        await ctx.api.deleteMessages(room.roomId, room.lastMessageIds);
+                    } catch (_) { }
+                }
+
+                // Remove user by ban + unban
+                if (room.currentUserId) {
+                    try {
+                        await ctx.api.banChatMember(room.roomId, Number(room.currentUserId));
+                        await sleep(500);
+                        await ctx.api.unbanChatMember(room.roomId, Number(room.currentUserId));
+                    } catch (_) { }
+                }
+
                 room.isBusy = false;
+                room.lastMessageIds = [];
+                room.currentUserId = null;
                 await room.save();
-                console.log(`✅ Room ${room.roomId} freed after grace period`);
+                console.log(`✅ Room ${room.roomId} freed and cleaned after grace period`);
             } catch (e) {
                 console.error('Error freeing room:', e.message);
             }
-        }, 20 * 60 * 1000); // 15 minutes
+        }, 60 * 60 * 1000); // 1 hour
 
         // ── Send Delivery Card ───────────────────────────────────────
         await ctx.api.editMessageText(
@@ -627,7 +651,14 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             console.error('User badge error:', e);
         }
 
-        await sendToLogChannel(bot, `✅ <b>DELIVERY SUCCESS</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\nRoom: <code>${room.roomId}</code>\nClips: ${newMessageIds.length}\n\n#delivery 🚪`);
+        // Get room name for logging
+        let roomName = room.roomId;
+        try {
+            const chatInfo = await ctx.api.getChat(room.roomId);
+            roomName = chatInfo.title || room.roomId;
+        } catch (_) { }
+
+        await sendToLogChannel(bot, `✅ <b>DELIVERY SUCCESS</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\nRoom: ${roomName} (<code>${room.roomId}</code>)\nClips: ${newMessageIds.length}\n\n#delivery 🚪`);
 
     } catch (error) {
         console.error('deliverMovie Error:', error);
