@@ -49,114 +49,182 @@ module.exports = (bot) => {
         }
     });
 
-    // Public /help command - for all users
+    // Public /help command - for all users (with pagination for admins)
     bot.command('help', async (ctx) => {
-        const isGroup = ctx.chat.type !== 'private';
         const isAdminUser = isAdmin(ctx);
+        
+        // Page 1 - Basic User Guide
+        const page1 = `📖 HELP GUIDE\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `🎬 WHAT IS THIS BOT?\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `Get movie clips from our group!\n` +
+            `Search in group → Get clips in PM!\n\n` +
+            `📝 HOW TO GET CLIPS\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `Step 1: Join our group\n` +
+            `Step 2: Type a movie name\n` +
+            `Step 3: Tap the button I send\n` +
+            `Step 4: Get clips in PM! 📬\n\n` +
+            `📌 COMMANDS\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `/start - Start the bot\n` +
+            `/help - Show this guide\n` +
+            `/filters - Browse all movies\n` +
+            `/random - Random movie\n` +
+            `/trending - Top movies\n` +
+            `/myprofile - Your stats\n` +
+            `/todaystats - Today's activity\n` +
+            `/contact [text] - Contact admin\n\n` +
+            `💡 TIPS\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `✓ Don't worry about spelling!\n` +
+            `✓ I fix typos automatically\n` +
+            `✓ Use /filters to browse movies`;
 
-        let helpText = `📖 HELP GUIDE\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
+        // Page 2 - Admin Commands
+        const page2 = `⚙️ ADMIN COMMANDS\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `📊 STATS\n` +
+            `------------------\n` +
+            `/stats - Full dashboard\n` +
+            `/resetstats - Reset stats\n` +
+            `/logs - View error logs\n\n` +
+            `🎬 MOVIES\n` +
+            `------------------\n` +
+            `/addmovie - Add movie\n` +
+            `/delmovie - Delete movie\n` +
+            `/rename - Rename movie\n` +
+            `/thumb - Set thumbnail\n` +
+            `/addcategory - Add category\n\n` +
+            `🏠 ROOMS\n` +
+            `------------------\n` +
+            `/addroom - Add room\n` +
+            `/rooms - View rooms\n` +
+            `/cleanroom - Clean room\n` +
+            `/restartrooms - Reset rooms\n\n` +
+            `📡 BROADCAST\n` +
+            `------------------\n` +
+            `/broadcast - Send to all users`;
 
-        // WHAT IS THIS BOT
-        helpText += `🎬 WHAT IS THIS BOT?\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `This bot helps you get movie clips!\n`;
-        helpText += `Search in group → Get clips in your PM!\n`;
-        helpText += `Simple as that! 😄\n\n`;
+        const page3 = `⚙️ SETTINGS\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `/settings - View settings\n` +
+            `/setmode - Set mode\n` +
+            `/setshortlink - Set shortlink\n` +
+            `/setapikey - Set API key\n` +
+            `/setforcesub - Set force sub\n` +
+            `/unsetforcesub - Remove force sub\n` +
+            `/settutorial - Set tutorial\n` +
+            `/maintenance - Toggle mode\n\n` +
+            `🛠️ UTILITY\n` +
+            `------------------\n` +
+            `/top - Top movies\n` +
+            `/users - Clean users\n` +
+            `/resetbadges - Reset badges\n` +
+            `/resetbot - Reset bot\n` +
+            `/unlock - Unlock user\n` +
+            `/contact - Contact user`;
 
-        // HOW TO USE
-        helpText += `📝 HOW TO GET CLIPS\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `Step 1: Join our group\n`;
-        helpText += `Step 2: Type a movie name\n`;
-        helpText += `Step 3: Tap the button I send\n`;
-        helpText += `Step 4: Get clips in your PM! 📬\n\n`;
+        // Show different pages based on user and pagination
+        if (!isAdminUser) {
+            await ctx.reply(page1, { parse_mode: 'HTML' });
+        } else {
+            const keyboard = new InlineKeyboard()
+                .text('Page 1: User Guide', 'help_1')
+                .text('Page 2: Admin', 'help_2')
+                .text('Page 3: Settings', 'help_3');
 
-        // EXAMPLE
-        helpText += `💡 EXAMPLE\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `You type: "Leo"\n`;
-        helpText += `Bot sends: Movie info + button\n`;
-        helpText += `You tap button → Clips in PM!\n\n`;
-
-        // USER COMMANDS
-        helpText += `📌 AVAILABLE COMMANDS\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `/start - Start the bot\n`;
-        helpText += `/help - Show this guide\n`;
-        helpText += `/filters - Browse all movies\n`;
-        helpText += `/random - Get random movie\n`;
-        helpText += `/trending - See top movies\n`;
-        helpText += `/myprofile - Your stats & badges\n`;
-        helpText += `/todaystats - Today's activity\n`;
-        helpText += `/contact <msg> - Contact admin\n\n`;
-
-        // TIPS
-        helpText += `💡 TIPS\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `✓ Don't worry about spelling!\n`;
-        helpText += `✓ I fix typos automatically\n`;
-        helpText += `✓ Spaces don't matter\n`;
-        helpText += `✓ Use /filters to browse movies\n\n`;
-
-        // NEW TO TELEGRAM?
-        helpText += `📱 NEW TO TELEGRAM?\n`;
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `No problem! Just:\n`;
-        helpText += `1. Join the group\n`;
-        helpText += `2. Type any movie name\n`;
-        helpText += `3. I'll handle the rest!\n`;
-        helpText += `The clips will come to your chat (PM)\n\n`;
-
-        // ADMIN COMMANDS (if admin)
-        if (isAdminUser) {
-            helpText += `⚙️ ADMIN COMMANDS\n`;
-            helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-            helpText += `📊 STATS & ANALYTICS\n`;
-            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            helpText += `/stats - Full dashboard\n`;
-            helpText += `/resetstats - Reset all stats\n`;
-            helpText += `/logs - View error logs\n\n`;
-            helpText += `🎬 MOVIE MANAGEMENT\n`;
-            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            helpText += `/addmovie - Add new movie\n`;
-            helpText += `/delmovie - Delete movie\n`;
-            helpText += `/rename - Rename movie\n`;
-            helpText += `/thumb - Set thumbnail\n`;
-            helpText += `/addcategory - Add categories\n\n`;
-            helpText += `🏠 ROOM MANAGEMENT\n`;
-            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            helpText += `/addroom - Add delivery room\n`;
-            helpText += `/rooms - View all rooms\n`;
-            helpText += `/cleanroom - Clean room (interactive)\n`;
-            helpText += `/restartrooms - Reset all rooms\n\n`;
-            helpText += `📡 BROADCASTING\n`;
-            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            helpText += `/broadcast - Send message to all users\n\n`;
-            helpText += `⚙️ SYSTEM SETTINGS\n`;
-            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            helpText += `/settings - View all settings\n`;
-            helpText += `/setmode - Set monetization mode\n`;
-            helpText += `/setshortlink - Set shortlink API\n`;
-            helpText += `/setapikey - Set API key\n`;
-            helpText += `/setforcesub - Set force subscribe\n`;
-            helpText += `/unsetforcesub - Remove force sub\n`;
-            helpText += `/settutorial - Set tutorial video\n`;
-            helpText += `/maintenance - Toggle maintenance\n\n`;
-            helpText += `🛠️ UTILITY\n`;
-            helpText += `━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-            helpText += `/top - Top searched movies\n`;
-            helpText += `/users - Clean blocked users & export JSON\n`;
-            helpText += `/resetbadges - Reset user badges\n`;
-            helpText += `/resetbot - Reset all data\n`;
-            helpText += `/unlock - Unlock stuck user\n`;
-            helpText += `/contact - Contact user\n\n`;
+            await ctx.reply(page1 + `\n\n⚠️ Showing Page 1 of 3`, { parse_mode: 'HTML', reply_markup: keyboard });
         }
+    });
 
-        helpText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        helpText += `Need help? Use /contact <message>`;
+    // Help pagination callbacks
+    bot.callbackQuery(/^help_(\d+)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        
+        const page = ctx.match[1];
+        
+        const pages = {
+            '1': `📖 HELP GUIDE\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `🎬 WHAT IS THIS BOT?\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `Get movie clips from our group!\n` +
+                `Search in group → Get clips in PM!\n\n` +
+                `📝 HOW TO GET CLIPS\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `Step 1: Join our group\n` +
+                `Step 2: Type a movie name\n` +
+                `Step 3: Tap the button I send\n` +
+                `Step 4: Get clips in PM! 📬\n\n` +
+                `📌 COMMANDS\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `/start - Start the bot\n` +
+                `/help - Show this guide\n` +
+                `/filters - Browse all movies\n` +
+                `/random - Random movie\n` +
+                `/trending - Top movies\n` +
+                `/myprofile - Your stats\n` +
+                `/todaystats - Today's activity\n` +
+                `/contact [text] - Contact admin\n\n` +
+                `💡 TIPS\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `✓ Don't worry about spelling!\n` +
+                `✓ I fix typos automatically\n` +
+                `✓ Use /filters to browse movies`,
+            '2': `⚙️ ADMIN COMMANDS\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `📊 STATS\n` +
+                `------------------\n` +
+                `/stats - Full dashboard\n` +
+                `/resetstats - Reset stats\n` +
+                `/logs - View error logs\n\n` +
+                `🎬 MOVIES\n` +
+                `------------------\n` +
+                `/addmovie - Add movie\n` +
+                `/delmovie - Delete movie\n` +
+                `/rename - Rename movie\n` +
+                `/thumb - Set thumbnail\n` +
+                `/addcategory - Add category\n\n` +
+                `🏠 ROOMS\n` +
+                `------------------\n` +
+                `/addroom - Add room\n` +
+                `/rooms - View rooms\n` +
+                `/cleanroom - Clean room\n` +
+                `/restartrooms - Reset rooms\n\n` +
+                `📡 BROADCAST\n` +
+                `------------------\n` +
+                `/broadcast - Send to all users`,
+            '3': `⚙️ SETTINGS & UTILITY\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n\n` +
+                `⚙️ SETTINGS\n` +
+                `------------------\n` +
+                `/settings - View settings\n` +
+                `/setmode - Set mode\n` +
+                `/setshortlink - Set shortlink\n` +
+                `/setapikey - Set API key\n` +
+                `/setforcesub - Set force sub\n` +
+                `/unsetforcesub - Remove force sub\n` +
+                `/settutorial - Set tutorial\n` +
+                `/maintenance - Toggle mode\n\n` +
+                `🛠️ UTILITY\n` +
+                `------------------\n` +
+                `/top - Top movies\n` +
+                `/users - Clean users\n` +
+                `/resetbadges - Reset badges\n` +
+                `/resetbot - Reset bot\n` +
+                `/unlock - Unlock user\n` +
+                `/contact - Contact user`
+        };
 
-        await ctx.reply(helpText, { parse_mode: 'HTML' });
+        const keyboard = new InlineKeyboard()
+            .text('Page 1: User', 'help_1')
+            .text('Page 2: Admin', 'help_2')
+            .text('Page 3: Settings', 'help_3');
+
+        await ctx.answerCallbackQuery();
+        await ctx.editMessageText(pages[page] + `\n\n⚠️ Showing Page ${page} of 3`, { parse_mode: 'HTML', reply_markup: keyboard });
     });
 
     // Public /todaystats - shows today's activity in group
