@@ -74,7 +74,7 @@ const paginationSessionSchema = new mongoose.Schema({
     movieIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Movie' }],
     page: { type: Number, default: 0 },
     lastMessageId: { type: Number, default: null },
-    createdAt: { type: Date, default: Date.now, expires: 12 * 60 * 60 } // Auto-delete after 12 hours
+    createdAt: { type: Date, default: Date.now, expires: 12 * 60 * 60 }
 });
 
 const Movie = mongoose.model('Movie', movieSchema);

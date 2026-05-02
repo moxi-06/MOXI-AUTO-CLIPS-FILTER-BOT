@@ -276,7 +276,6 @@ function buildFilterKeyboard(movies, page, total) {
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
 
-    // Strictly vertical pagination
     if (page < totalPages - 1) {
         keyboard.text('Next ▶', `fp_${page + 1}`).row();
     }
@@ -312,7 +311,8 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
         `<b>Type:</b> Love 💗\n` +
         `<b>Ratio:</b> 16:9\n` +
         `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
-        `━━━━━━━━━ ✦ ━━━━━━━━━`;
+        `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+        `😍👇 Click below to get clips`;
 
     let sentMsg;
     if (photoFileId) {
@@ -385,14 +385,17 @@ module.exports = (bot) => {
 
         const details = extractMovieDetails(randomMovie.title);
         const reqName = ctx.from.first_name || ctx.from.username || 'User';
+        const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
 
         const resultText = `🎲 <b>RANDOM PICK FOR YOU!</b>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
             `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
             `<b>Name:</b> ${details.name}\n` +
-            `<b>Clips:</b> ${clipCount} Available\n` +
+            `<b>Type:</b> Love 💗\n` +
+            `<b>Ratio:</b> 16:9\n` +
+            `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `😍 Lucky you! Tap below to get clips in PM!`;
+            `😍👇 Click below to get clips`;
 
         if (photoFileId) {
             await ctx.replyWithPhoto(photoFileId, {
@@ -428,24 +431,26 @@ module.exports = (bot) => {
         const topMovies = await Movie.find().sort({ requests: -1 }).limit(5).lean();
 
         if (topMovies.length === 0) {
-            const reply = await ctx.reply('📭 No movies available yet!');
+            const reply = await ctx.reply('📭 No movies available yet!', { reply_parameters: { message_id: ctx.message.message_id } });
             deleteTriggerMessage(ctx);
             return;
         }
 
-        let trendingText = `🔥 <b>TRENDING MOVIES</b>\n`;
-        trendingText += `━━━━━━━━━━━━━━━━━━━━\n\n`;
-
-        topMovies.forEach((m, i) => {
-            const clipCount = m.files?.length || m.messageIds.length;
-            trendingText += `${i + 1}. <b>${m.title}</b> (${m.requests} requests)\n`;
-            trendingText += `   📂 ${clipCount} clips\n\n`;
+        const keyboard = new InlineKeyboard();
+        topMovies.forEach((m) => {
+            const count = m.files?.length || m.messageIds.length;
+            keyboard.text(`🔥 ${m.title.toUpperCase()} (${m.requests} req)`, `f_${m.title}`).row();
         });
 
-        trendingText += `━━━━━━━━━━━━━━━━━━━━\n`;
-        trendingText += `💡 Tap any movie to get clips in PM!`;
+        const trendingText = `🔥 <b>TRENDING MOVIES</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `Tap a movie below to get clips in your PM!`;
 
-        await ctx.reply(trendingText, { parse_mode: 'HTML' });
+        await ctx.reply(trendingText, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+            reply_parameters: { message_id: ctx.message.message_id }
+        });
     });
 
     bot.on('message:text', async (ctx, next) => {
@@ -724,12 +729,14 @@ module.exports = (bot) => {
                 const reqName = ctx.from.first_name || ctx.from.username || 'User';
 
                 const resultText = `✅ <b>GOT IT!</b>\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                     `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
                     `<b>Name:</b> ${details.name}\n` +
+                    `<b>Type:</b> Love 💗\n` +
+                    `<b>Ratio:</b> 16:9\n` +
                     `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                    `👇😍 Click below to get your clips!`;
+                    `😍👇 Click below to get clips`;
 
                 if (photoFileId) {
                     await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
@@ -773,9 +780,10 @@ module.exports = (bot) => {
                 `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
                 `<b>Name:</b> ${details.name}\n` +
                 `<b>Type:</b> Love 💗\n` +
+                `<b>Ratio:</b> 16:9\n` +
                 `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `👇😍 Click below to get your clips!`;
+                `😍👇 Click below to get clips`;
 
             if (photoFileId) {
                 await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
@@ -810,13 +818,14 @@ module.exports = (bot) => {
             const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
             const reqName = ctx.from.first_name || ctx.from.username || 'User';
 
-            const resultText = `🔍 <b>FOUND IT!</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            const resultText = `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
                 `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
                 `<b>Name:</b> ${details.name}\n` +
+                `<b>Type:</b> Love 💗\n` +
+                `<b>Ratio:</b> 16:9\n` +
                 `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `👇😍 Click below to get your clips!`;
+                `😍👇 Click below to get clips`;
 
             if (photoFileId) {
                 await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
@@ -850,7 +859,6 @@ module.exports = (bot) => {
             const pageIds = session.movieIds.slice(start, end);
 
             const pageMovies = await Movie.find({ _id: { $in: pageIds } });
-            // Preserve order
             const orderedMovies = pageIds.map(id => pageMovies.find(m => m._id.equals(id)));
 
             const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
