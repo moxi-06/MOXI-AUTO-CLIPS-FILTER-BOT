@@ -1,3 +1,22 @@
+const escapeHtml = (str) => {
+    if (!str) return '';
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+};
+
+const safeAnswerCallbackQuery = async (ctx, options = {}) => {
+    try {
+        await ctx.answerCallbackQuery(options);
+    } catch (e) {
+        if (!e.message.includes('query is too old') && !e.message.includes('response timeout')) {
+            throw e;
+        }
+    }
+};
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const cleanMovieName = (title) => {
@@ -51,6 +70,19 @@ const decodeMovieLink = (encodedName) => {
     }
 };
 
+const extractMovieDetails = (title) => {
+    let name = title;
+    let credits = null;
+
+    if (title.includes('@')) {
+        const parts = title.split('@');
+        name = parts[0].replace(/[\s\-]+$/, '').trim();
+        credits = '@' + parts.slice(1).join('@').trim();
+    }
+
+    return { name, credits };
+};
+
 const sendToLogChannel = async (bot, message) => {
     const logChannelId = process.env.LOG_CHANNEL_ID;
     if (!logChannelId || !bot) return;
@@ -62,9 +94,12 @@ const sendToLogChannel = async (bot, message) => {
 };
 
 module.exports = {
+    escapeHtml,
+    safeAnswerCallbackQuery,
     sleep,
     cleanMovieName,
     encodeMovieLink,
     decodeMovieLink,
-    sendToLogChannel
+    sendToLogChannel,
+    extractMovieDetails
 };

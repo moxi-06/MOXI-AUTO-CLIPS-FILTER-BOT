@@ -1,5 +1,5 @@
 const { Movie, Room, User } = require('../database');
-const { decodeMovieLink, sleep, sendToLogChannel, encodeMovieLink } = require('../utils/helpers');
+const { decodeMovieLink, sleep, sendToLogChannel, encodeMovieLink, escapeHtml } = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
 
 function getUserNameForLog(user) {
@@ -68,7 +68,7 @@ module.exports = (bot) => {
                 adminId,
                 `📩 <b>User Message</b>\n\n` +
                 `👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n` +
-                `📝 Message: ${messageText}\n\n` +
+                `📝 Message: ${escapeHtml(messageText)}\n\n` +
                 `🔗 Reply to this message to reply back!`,
                 { parse_mode: 'HTML' }
             );
@@ -80,6 +80,53 @@ module.exports = (bot) => {
         } catch (e) {
             ctx.reply(`❌ Could not send message to admin. Please try again later.`);
         }
+    });
+
+    // Forward all PM messages (non-command) to log channel
+    bot.on('message', async (ctx, next) => {
+        if (ctx.chat.type !== 'private') return next();
+        if (ctx.message.text && ctx.message.text.startsWith('/')) return next();
+
+        const adminId = process.env.ADMIN_ID;
+        const logChannelId = process.env.LOG_CHANNEL_ID;
+        if (!logChannelId) return next();
+
+        const user = ctx.from;
+        const userName = user.username ? `@${user.username}` : `${user.first_name || 'User'} ${user.last_name || ''}`.trim();
+
+        let logText = `📨 <b>New PM Message</b>\n\n👤 User: ${userName} (<code>${user.id}</code>)\n`;
+
+        if (ctx.message.text) {
+            logText += `📝 Message: ${escapeHtml(ctx.message.text)}\n`;
+        } else if (ctx.message.photo) {
+            const caption = ctx.message.caption || '(no caption)';
+            logText += `📸 Photo: ${escapeHtml(caption)}\n`;
+        } else if (ctx.message.video) {
+            const caption = ctx.message.caption || '(no caption)';
+            logText += `🎥 Video: ${escapeHtml(caption)}\n`;
+        } else if (ctx.message.document) {
+            const caption = ctx.message.caption || '(no caption)';
+            logText += `📄 Document: ${escapeHtml(caption)}\n`;
+        } else if (ctx.message.sticker) {
+            logText += `🎭 Sticker: ${ctx.message.sticker.emoji || ''}\n`;
+        } else if (ctx.message.animation) {
+            logText += `🎞️ GIF/Animation\n`;
+        } else if (ctx.message.audio) {
+            const caption = ctx.message.caption || '(no caption)';
+            logText += `🎵 Audio: ${escapeHtml(caption)}\n`;
+        } else if (ctx.message.voice) {
+            logText += `🎤 Voice Message\n`;
+        } else if (ctx.message.video_note) {
+            logText += `⭕ Video Note\n`;
+        } else {
+            logText += `📎 Other media type\n`;
+        }
+
+        try {
+            await bot.api.sendMessage(logChannelId, logText, { parse_mode: 'HTML' });
+        } catch (_) { }
+
+        return next();
     });
 
     // Handle replies from admin to users
@@ -680,10 +727,14 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         const movieTitle = decodeMovieLink(encodedMovieTitle);
 
         if (!movieTitle) {
-            return await ctx.editMessageText(
-                '❌ Link expired. Please search for the movie again in the group.',
-                { parse_mode: 'HTML' }
-            );
+            try {
+                return await ctx.editMessageText(
+                    '❌ Link expired. Please search for the movie again in the group.',
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                if (!e.message.includes('message is not modified')) throw e;
+            }
         }
 
         // Check if user joined channel
@@ -718,19 +769,27 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // User joined - deliver movie
         const movie = await Movie.findOne({ title: movieTitle });
         if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
-            return await ctx.editMessageText(
-                '❌ Clips not available anymore. Please search for another movie.',
-                { parse_mode: 'HTML' }
-            );
+            try {
+                return await ctx.editMessageText(
+                    '❌ Clips not available anymore. Please search for another movie.',
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                if (!e.message.includes('message is not modified')) throw e;
+            }
         }
 
         // Log force sub verified
         await sendToLogChannel(bot, `✅ <b>Force Sub Verified</b>\n\n👤 User: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\n🎬 Movie: <i>${movie.title}</i>\n\n#verified 📢`);
 
-        await ctx.editMessageText(
-            `✅ <b>Welcome back!</b>\n\n⏳ Preparing your clips...`,
-            { parse_mode: 'HTML' }
-        );
+        try {
+            await ctx.editMessageText(
+                `✅ <b>Welcome back!</b>\n\n⏳ Preparing your clips...`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {
+            if (!e.message.includes('message is not modified')) throw e;
+        }
 
         // Trigger delivery
         deliverMovie(ctx, bot, movie, ctx.callbackQuery.message.message_id).catch(e => console.error('Delivery Error:', e));

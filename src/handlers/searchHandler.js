@@ -1,6 +1,16 @@
 const { Movie, User, PaginationSession } = require('../database');
-const { cleanMovieName, encodeMovieLink, sendToLogChannel } = require('../utils/helpers');
+const { cleanMovieName, encodeMovieLink, sendToLogChannel, escapeHtml, extractMovieDetails } = require('../utils/helpers');
 const { InlineKeyboard } = require('grammy');
+
+const safeAnswer = async (ctx, options = {}) => {
+    try {
+        await ctx.answerCallbackQuery(options);
+    } catch (e) {
+        if (!e.message.includes('query is too old') && !e.message.includes('response timeout')) {
+            throw e;
+        }
+    }
+};
 
 const ITEMS_PER_PAGE = 30;
 
@@ -293,12 +303,15 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
     const clipCount = movie.files?.length || movie.messageIds.length;
     const photoFileId = movie.thumbnail || null;
 
-    const resultText = (isAutoMatched ? `✨ SMART MATCH FOUND\n` : `✨ ${movie.title.toUpperCase()}\n`) +
-        `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+    const details = extractMovieDetails(movie.title);
+    const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
+
+    const resultText = `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
         `👤 <b>Requested by:</b> <a href="tg://user?id=${reqSource.id}">${reqName}</a>\n\n` +
-        `${isAutoMatched ? `🎬 <b>Movie:</b> ${movie.title}\n` : ''}` +
-        `📂 <b>Clips:</b> ${clipCount} Available\n` +
-        `📥 <b>Delivery:</b> Direct PM\n` +
+        `<b>Name:</b> ${details.name}\n` +
+        `<b>Type:</b> Love 💗\n` +
+        `<b>Ratio:</b> 16:9\n` +
+        `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
         `━━━━━━━━━ ✦ ━━━━━━━━━`;
 
     let sentMsg;
@@ -324,8 +337,8 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
                 ctx.chat.id, sentMsg.message_id,
                 `⏰ <b>LINK EXPIRED</b>\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `🎬 <b>Movie:</b> ${movie.title}\n\n` +
-                `🔍 <i>Search again to get a fresh link!</i>`,
+                `<b>Movie:</b> ${movie.title}\n\n` +
+                `<i>Search again to get a fresh link!</i>`,
                 { parse_mode: 'HTML' }
             );
         } catch (_) { }
@@ -370,12 +383,16 @@ module.exports = (bot) => {
         const clipCount = randomMovie.files?.length || randomMovie.messageIds.length;
         const photoFileId = randomMovie.thumbnail || null;
 
+        const details = extractMovieDetails(randomMovie.title);
+        const reqName = ctx.from.first_name || ctx.from.username || 'User';
+
         const resultText = `🎲 <b>RANDOM PICK FOR YOU!</b>\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `🎬 <b>${randomMovie.title}</b>\n` +
-            `📂 <b>Clips:</b> ${clipCount} Available\n` +
+            `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
+            `<b>Name:</b> ${details.name}\n` +
+            `<b>Clips:</b> ${clipCount} Available\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `👆 Tap below to get clips in your PM!`;
+            `😍 Lucky you! Tap below to get clips in PM!`;
 
         if (photoFileId) {
             await ctx.replyWithPhoto(photoFileId, {
@@ -671,12 +688,16 @@ module.exports = (bot) => {
         const movieTitle = ctx.match[1];
 
         if (movieTitle === 'no') {
-            await ctx.answerCallbackQuery();
-            await ctx.editMessageText(
-                `❌ <b>Clips not found</b>\n\n` +
-                `Try searching with correct spelling or ask admin to add the movie!`,
-                { parse_mode: 'HTML' }
-            );
+            await safeAnswer(ctx);
+            try {
+                await ctx.editMessageText(
+                    `❌ <b>Clips not found</b>\n\n` +
+                    `Try searching with correct spelling or ask admin to add the movie!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                if (!e.message.includes('message is not modified')) throw e;
+            }
             return;
         }
 
@@ -690,27 +711,35 @@ module.exports = (bot) => {
 
                 const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
                 const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(movie.title)}`;
-                const keyboard = new InlineKeyboard().url('📥 Tap to Get Clips in PM', privateStart);
+                const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
+
 
                 await ctx.answerCallbackQuery({ text: '✅ Found it!', show_alert: false });
 
                 const clipCount = movie.files?.length || movie.messageIds.length;
                 const photoFileId = movie.thumbnail || null;
 
-                const resultText = `✨ ${movie.title.toUpperCase()}\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                    `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                    `📥 <b>Delivery:</b> Direct PM\n` +
+                const details = extractMovieDetails(movie.title);
+                const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
+                const reqName = ctx.from.first_name || ctx.from.username || 'User';
+
+                const resultText = `✅ <b>GOT IT!</b>\n` +
                     `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                    `👆 Tap below to get clips!`;
+                    `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
+                    `<b>Name:</b> ${details.name}\n` +
+                    `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
+                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                    `👇😍 Click below to get your clips!`;
 
                 if (photoFileId) {
                     await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
                 } else {
-                    await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                    try {
+                        await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                    } catch (e) {
+                        if (!e.message.includes('message is not modified')) throw e;
+                    }
                 }
-            } else {
-                await ctx.answerCallbackQuery({ text: '❌ Clips not found', show_alert: true });
             }
         } catch (error) {
             console.error('❌ Group search error:', error.message);
@@ -731,17 +760,22 @@ module.exports = (bot) => {
 
             const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
             const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(movie.title)}`;
-            const keyboard = new InlineKeyboard().url('📥 Tap to Get Clips in PM', privateStart);
+            const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
 
             const clipCount = movie.files?.length || movie.messageIds.length;
             const photoFileId = movie.thumbnail || null;
 
-            const resultText = `✨ ${movie.title.toUpperCase()}\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                `📥 <b>Delivery:</b> Direct PM\n` +
+            const details = extractMovieDetails(movie.title);
+            const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
+            const reqName = ctx.from.first_name || ctx.from.username || 'User';
+
+            const resultText = `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+                `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
+                `<b>Name:</b> ${details.name}\n` +
+                `<b>Type:</b> Love 💗\n` +
+                `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `👆 Tap below to get clips!`;
+                `👇😍 Click below to get your clips!`;
 
             if (photoFileId) {
                 await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
@@ -767,22 +801,31 @@ module.exports = (bot) => {
 
             const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
             const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(movie.title)}`;
-            const keyboard = new InlineKeyboard().url('📥 Tap to Get Clips in PM', privateStart);
+            const keyboard = new InlineKeyboard().url('📥 Get Clips in PM', privateStart);
 
             const clipCount = movie.files?.length || movie.messageIds.length;
             const photoFileId = movie.thumbnail || null;
 
-            const resultText = `✨ ${movie.title.toUpperCase()}\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `📂 <b>Total Clips:</b> ${clipCount} Available\n` +
-                `📥 <b>Delivery:</b> Direct PM\n` +
+            const details = extractMovieDetails(movie.title);
+            const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
+            const reqName = ctx.from.first_name || ctx.from.username || 'User';
+
+            const resultText = `🔍 <b>FOUND IT!</b>\n` +
                 `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `👆 Tap below to get clips!`;
+                `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${reqName}</a>\n\n` +
+                `<b>Name:</b> ${details.name}\n` +
+                `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `👇😍 Click below to get your clips!`;
 
             if (photoFileId) {
                 await ctx.replyWithPhoto(photoFileId, { caption: resultText, reply_markup: keyboard, parse_mode: 'HTML' });
             } else {
-                await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                try {
+                    await ctx.editMessageText(resultText, { reply_markup: keyboard, parse_mode: 'HTML' });
+                } catch (e) {
+                    if (!e.message.includes('message is not modified')) throw e;
+                }
             }
         } catch (error) {
             console.error('Search callback error:', error);
@@ -819,11 +862,15 @@ module.exports = (bot) => {
                 `📑 Page: ${page + 1} of ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n\n` +
                 `✨ Works in PM only - clips open in your private chat!`;
 
-            await ctx.answerCallbackQuery();
-            await ctx.editMessageText(helpText, {
-                parse_mode: 'HTML',
-                reply_markup: keyboard
-            });
+            await safeAnswer(ctx);
+            try {
+                await ctx.editMessageText(helpText, {
+                    parse_mode: 'HTML',
+                    reply_markup: keyboard
+                });
+            } catch (e) {
+                if (!e.message.includes('message is not modified')) throw e;
+            }
 
             session.page = page;
             await session.save();
