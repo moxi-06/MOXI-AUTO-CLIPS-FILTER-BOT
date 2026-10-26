@@ -25,8 +25,77 @@ const adminCommands = [
     'admin', 'addmovie', 'deletemovie', 'addcategory', 'stats', 'top',
     'addroom', 'rooms', 'cleanroom', 'broadcast', 'maintenance',
     'logs', 'restartrooms', 'settings', 'setmode', 'setshortlink',
-    'setapikey', 'setforcesub', 'unsetforcesub', 'resetbot', 'unlock', 'resetstats'
+    'setapikey', 'setforcesub', 'unsetforcesub', 'resetbot', 'unlock', 'resetstats',
+    'delclip'
 ];
+
+// Helper to remove a single mistaken clip/file from database and channel
+async function removeSingleClip(movieQuery, clipIdentifier, ctxApi = null) {
+    let movie = null;
+    if (/^[0-9a-fA-F]{24}$/.test(movieQuery)) {
+        movie = await Movie.findById(movieQuery);
+    }
+    if (!movie && movieQuery) {
+        movie = await Movie.findOne({ title: cleanMovieName(movieQuery) });
+    }
+    if (!movie && movieQuery) {
+        movie = await Movie.findOne({ title: movieQuery });
+    }
+    const numId = Number(clipIdentifier);
+    if (!movie && !isNaN(numId)) {
+        movie = await Movie.findOne({ messageIds: numId });
+    }
+    if (!movie && clipIdentifier) {
+        movie = await Movie.findOne({ 'files.fileId': clipIdentifier });
+    }
+
+    if (!movie) {
+        return { success: false, message: 'Could not find a movie matching that clip or title.' };
+    }
+
+    // Pull messageId
+    if (!isNaN(numId)) {
+        await Movie.updateOne({ _id: movie._id }, { $pull: { messageIds: numId } });
+    }
+
+    // Pull from files array
+    if (clipIdentifier) {
+        await Movie.updateOne({ _id: movie._id }, {
+            $pull: {
+                files: {
+                    $or: [
+                        { fileId: clipIdentifier },
+                        { fileType: clipIdentifier }
+                    ]
+                }
+            }
+        });
+    }
+
+    const updated = await Movie.findById(movie._id);
+    const remaining = updated.files?.length || updated.messageIds?.length || 0;
+
+    // If thumbnail was this file, update thumbnail
+    if (updated.thumbnail && (updated.thumbnail === clipIdentifier || !updated.files.some(f => f.fileId === updated.thumbnail))) {
+        updated.thumbnail = updated.files[0]?.fileId || null;
+        await updated.save();
+    }
+
+    // Delete message from DB channel if bot is admin
+    const dbChannel = process.env.DB_CHANNEL_ID;
+    if (dbChannel && ctxApi && !isNaN(numId)) {
+        try {
+            await ctxApi.deleteMessage(dbChannel, numId);
+        } catch (_) { }
+    }
+
+    return {
+        success: true,
+        title: updated.title,
+        remaining,
+        movieId: updated._id
+    };
+}
 
 // Helper to build the main Admin Control Console
 async function renderAdminPanel(ctx, isEdit = false) {
@@ -34,6 +103,7 @@ async function renderAdminPanel(ctx, isEdit = false) {
     const modeLabels = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 24h Pass' };
     const forceSubChannel = await getSetting('forceSubChannel', null);
     const tutStr = await getSetting('tutorial', null);
+    const promoStr = await getSetting('roomPromo', null);
 
     let tutorialDisplay = 'None ❌';
     if (tutStr) {
@@ -41,6 +111,14 @@ async function renderAdminPanel(ctx, isEdit = false) {
             const parsed = JSON.parse(tutStr);
             tutorialDisplay = parsed.type === 'link' ? 'Web Link 🔗' : `${parsed.type.toUpperCase()} 🎥`;
         } catch (_) { tutorialDisplay = 'Active ✅'; }
+    }
+
+    let promoDisplay = 'Disabled ❌';
+    if (promoStr) {
+        try {
+            const parsed = JSON.parse(promoStr);
+            promoDisplay = `${parsed.type.toUpperCase()} ✅`;
+        } catch (_) { promoDisplay = 'Active ✅'; }
     }
 
     const rooms = await Room.find();
@@ -52,6 +130,7 @@ async function renderAdminPanel(ctx, isEdit = false) {
         `• <b>Mode:</b> ${modeLabels[mode] || mode}\n` +
         `• <b>Force Sub:</b> <code>${forceSubChannel || 'Disabled'}</code>\n` +
         `• <b>Tutorial Video:</b> <code>${tutorialDisplay}</code>\n` +
+        `• <b>Room Promo:</b> <code>${promoDisplay}</code>\n` +
         `• <b>Rooms:</b> <code>${freeRooms} Free / ${busyRooms} Busy (${rooms.length} Total)</code>\n` +
         `• <b>Maintenance:</b> ${maintenance ? '<b>ON ⚠️</b>' : '<b>OFF ✅</b>'}\n\n` +
         `<i>Tap any module below to configure:</i>`;
@@ -59,6 +138,8 @@ async function renderAdminPanel(ctx, isEdit = false) {
     const keyboard = new InlineKeyboard()
         .text('⚙️ Mode Switcher', 'admin_mode_menu')
         .text('🎥 Tutorial Video', 'admin_tut_menu').row()
+        .text('📢 Room Promo', 'admin_promo_menu')
+        .text('🗑️ Remove Clip', 'admin_delclip_menu').row()
         .text('📢 Force Sub', 'admin_forcesub_menu')
         .text('🏠 Room Manager', 'admin_rooms_menu').row()
         .text('📊 Live Analytics', 'admin_stats_view')
@@ -99,14 +180,13 @@ module.exports = (bot) => {
     // ────────────────────────────────────────────────────────────────
     // Interactive Admin Input Listener (Tutorial, ForceSub, Room ID)
     // ────────────────────────────────────────────────────────────────
-    bot.on(['message:text', 'message:video', 'message:document'], async (ctx, next) => {
+    bot.on(['message:text', 'message:video', 'message:document', 'message:photo'], async (ctx, next) => {
         if (!isAdmin(ctx) || ctx.chat?.type !== 'private') return next();
 
         const state = global.adminState[ctx.from.id];
-        if (!state) return next();
 
         // 1. Awaiting Tutorial Video/File/Link
-        if (state.action === 'awaiting_tutorial') {
+        if (state && state.action === 'awaiting_tutorial') {
             let tutorialData = null;
             if (ctx.message.video) {
                 tutorialData = { type: 'video', fileId: ctx.message.video.file_id };
@@ -133,7 +213,7 @@ module.exports = (bot) => {
         }
 
         // 2. Awaiting Force Sub Channel ID or @username
-        if (state.action === 'awaiting_forcesub') {
+        if (state && state.action === 'awaiting_forcesub') {
             const input = ctx.message.text?.trim();
             if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
                 delete global.adminState[ctx.from.id];
@@ -150,7 +230,7 @@ module.exports = (bot) => {
         }
 
         // 3. Awaiting Room ID to add
-        if (state.action === 'awaiting_room') {
+        if (state && state.action === 'awaiting_room') {
             const input = ctx.message.text?.trim();
             if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
                 delete global.adminState[ctx.from.id];
@@ -164,6 +244,127 @@ module.exports = (bot) => {
                 parse_mode: 'HTML',
                 reply_markup: new InlineKeyboard().text('🏠 Room Manager', 'admin_rooms_menu').text('⚙️ Console', 'admin_panel')
             });
+        }
+
+        // 4. Awaiting Room Promotional Signoff Message / Media
+        if (state && state.action === 'awaiting_promo') {
+            let promoData = null;
+            if (ctx.message.photo) {
+                promoData = {
+                    type: 'photo',
+                    fileId: ctx.message.photo[ctx.message.photo.length - 1].file_id,
+                    caption: ctx.message.caption || ''
+                };
+            } else if (ctx.message.video) {
+                promoData = {
+                    type: 'video',
+                    fileId: ctx.message.video.file_id,
+                    caption: ctx.message.caption || ''
+                };
+            } else if (ctx.message.document) {
+                promoData = {
+                    type: 'document',
+                    fileId: ctx.message.document.file_id,
+                    caption: ctx.message.caption || ''
+                };
+            } else if (ctx.message.text) {
+                if (ctx.message.text === '/cancel' || ctx.message.text.toLowerCase() === 'cancel') {
+                    delete global.adminState[ctx.from.id];
+                    return ctx.reply('❌ Promo message update cancelled.', {
+                        reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                    });
+                }
+                promoData = { type: 'text', text: ctx.message.text };
+            }
+
+            if (promoData) {
+                delete global.adminState[ctx.from.id];
+                await setSetting('roomPromo', JSON.stringify(promoData));
+                return ctx.reply(
+                    `✅ <b>Room Promotional Signoff Message Saved!</b>\n\n` +
+                    `This will be sent automatically to the private room right after all clips are delivered, serving as the "Full Stop" marker.\n\n` +
+                    `<i>It will also auto-delete with the clips when the 30-min session ends!</i>`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: new InlineKeyboard().text('⚙️ Return to Admin Console', 'admin_panel')
+                    }
+                );
+            }
+        }
+
+        // 5. Awaiting Manual Delete Clip Input
+        if (state && state.action === 'awaiting_delclip') {
+            const input = ctx.message.text?.trim();
+            if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
+                delete global.adminState[ctx.from.id];
+                return ctx.reply('❌ Delete clip operation cancelled.', {
+                    reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                });
+            }
+            delete global.adminState[ctx.from.id];
+
+            const parts = input.includes('|') ? input.split('|') : input.split(/\s+(?=\d+$)/);
+            const movieTitle = parts[0]?.trim();
+            const clipId = parts[1]?.trim();
+
+            if (!movieTitle || !clipId) {
+                return ctx.reply('❌ Format incorrect. Use: <code>Movie Title | Message ID</code>', {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                });
+            }
+
+            const result = await removeSingleClip(movieTitle, clipId, ctx.api);
+            if (result.success) {
+                return ctx.reply(
+                    `✅ <b>Clip Removed Successfully!</b>\n\n` +
+                    `• <b>Movie:</b> 🎬 <code>${result.title}</code>\n` +
+                    `• <b>Removed ID:</b> <code>${clipId}</code>\n` +
+                    `• <b>Remaining Clips:</b> <code>${result.remaining}</code>`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                    }
+                );
+            } else {
+                return ctx.reply(`❌ ${result.message}`, {
+                    reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                });
+            }
+        }
+
+        // 6. Magic Forward Detection: Admin forwards a mistake clip from DB channel directly
+        if (!state && (ctx.message.forward_origin || ctx.message.forward_from_chat || ctx.message.forward_from_message_id)) {
+            const origin = ctx.message.forward_origin;
+            const forwardedMsgId = origin?.message_id || ctx.message.forward_from_message_id;
+            let fileId = null;
+            if (ctx.message.video) fileId = ctx.message.video.file_id;
+            else if (ctx.message.photo) fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+            else if (ctx.message.document) fileId = ctx.message.document.file_id;
+            else if (ctx.message.animation) fileId = ctx.message.animation.file_id;
+
+            const queryOr = [];
+            if (forwardedMsgId) queryOr.push({ messageIds: forwardedMsgId });
+            if (fileId) queryOr.push({ 'files.fileId': fileId });
+
+            if (queryOr.length > 0) {
+                const foundMovie = await Movie.findOne({ $or: queryOr });
+                if (foundMovie) {
+                    const totalClips = foundMovie.files?.length || foundMovie.messageIds?.length || 0;
+                    const keyboard = new InlineKeyboard()
+                        .text(`🗑️ Yes, Delete from "${foundMovie.title}"`, `delclip_yes_${foundMovie._id}_${forwardedMsgId || fileId}`).row()
+                        .text('❌ Cancel', 'admin_cancel_input');
+
+                    return ctx.reply(
+                        `⚠️ <b>Mistaken Clip Found in Database!</b>\n\n` +
+                        `• <b>Movie:</b> 🎬 <code>${foundMovie.title}</code>\n` +
+                        `• <b>Channel Message ID:</b> <code>${forwardedMsgId || 'File ID match'}</code>\n` +
+                        `• <b>Total Clips in Movie:</b> <code>${totalClips}</code>\n\n` +
+                        `<i>Do you want to permanently delete this clip from the database?</i>`,
+                        { parse_mode: 'HTML', reply_markup: keyboard }
+                    );
+                }
+            }
         }
 
         await next();
@@ -262,6 +463,159 @@ module.exports = (bot) => {
         await setSetting('tutorial', null);
         await ctx.answerCallbackQuery({ text: '✅ Tutorial disabled.' });
         await renderAdminPanel(ctx, true);
+    });
+
+    // ── Room Promotional Signoff Manager Menu ───────────────────────
+    bot.callbackQuery('admin_promo_menu', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        const promoStr = await getSetting('roomPromo', null);
+
+        let promoInfo = 'Disabled ❌';
+        if (promoStr) {
+            try {
+                const parsed = JSON.parse(promoStr);
+                promoInfo = `Active ✅ (<b>${parsed.type.toUpperCase()}</b>)\n` +
+                    `${parsed.caption ? `📝 <i>Caption: "${parsed.caption.substring(0, 50)}..."</i>\n` : ''}` +
+                    `${parsed.text ? `📝 <i>Text: "${parsed.text.substring(0, 50)}..."</i>\n` : ''}`;
+            } catch (_) { promoInfo = 'Active ✅'; }
+        }
+
+        const keyboard = new InlineKeyboard()
+            .text('📹 Set / Change Promo Message', 'admin_set_promo').row()
+            .text('❌ Turn Off Room Promo', 'admin_promo_off').row()
+            .text('🔙 Back to Console', 'admin_panel');
+
+        await ctx.editMessageText(
+            `📢 <b>ROOM PROMOTIONAL SIGNOFF MESSAGE</b>\n\n` +
+            `• <b>Status:</b> ${promoInfo}\n\n` +
+            `<i>This promotional photo/video/text is sent automatically to the private room right after all clips are delivered, serving as the "Full Stop" signoff message.</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery('admin_set_promo', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_promo' };
+
+        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        await ctx.editMessageText(
+            `📢 <b>Set Room Promotional Message:</b>\n\n` +
+            `Send or forward ANY of the following here:\n` +
+            `• A <b>Photo</b> (with optional caption)\n` +
+            `• A <b>Video</b> (with optional caption)\n` +
+            `• A <b>Text Message</b>\n\n` +
+            `<i>Tip: You can include links or your channel username in the caption/text!</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery('admin_promo_off', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await setSetting('roomPromo', null);
+        await ctx.answerCallbackQuery({ text: '✅ Room Promo turned off.' });
+        await renderAdminPanel(ctx, true);
+    });
+
+    // ── Mistaken Clip Removal Menu ─────────────────────────────────
+    bot.callbackQuery('admin_delclip_menu', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+
+        const keyboard = new InlineKeyboard()
+            .text('✏️ Enter Movie Title & Message ID', 'admin_delclip_input').row()
+            .text('🔙 Back to Console', 'admin_panel');
+
+        await ctx.editMessageText(
+            `🗑️ <b>REMOVE MISTAKEN CLIPS FROM DATABASE</b>\n\n` +
+            `Did you mistakenly post the wrong file or message to the DB channel?\n\n` +
+            `<b>Two easy ways to remove it:</b>\n` +
+            `1️⃣ <b>Magic Method:</b> Simply <b>forward that mistake message</b> from your DB channel directly to this PM chat!\n` +
+            `2️⃣ <b>Manual Method:</b> Tap the button below and send: <code>Movie Title | Message ID</code>\n` +
+            `3️⃣ Or type command: <code>/delclip [Movie Title] [Message ID]</code>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery('admin_delclip_input', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_delclip' };
+
+        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        await ctx.editMessageText(
+            `🗑️ <b>Send Movie Name and Message ID:</b>\n\n` +
+            `Format: <code>Movie Title | Message ID</code>\n\n` +
+            `<i>Example: <code>Leo | 452</code></i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery(/^delclip_yes_([^_]+)_(.+)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const movieId = ctx.match[1];
+        const clipId = ctx.match[2];
+
+        await ctx.answerCallbackQuery({ text: '🗑️ Removing clip...' });
+        const result = await removeSingleClip(movieId, clipId, ctx.api);
+
+        if (result.success) {
+            await ctx.editMessageText(
+                `✅ <b>Clip Removed Successfully!</b>\n\n` +
+                `• <b>Movie:</b> 🎬 <code>${result.title}</code>\n` +
+                `• <b>Removed ID:</b> <code>${clipId}</code>\n` +
+                `• <b>Remaining Clips:</b> <code>${result.remaining}</code>`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                }
+            );
+        } else {
+            await ctx.editMessageText(
+                `❌ <b>Error:</b> ${result.message}`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                }
+            );
+        }
+    });
+
+    // /delclip Command
+    bot.command('delclip', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const args = (ctx.match || '').trim();
+        if (!args) {
+            return ctx.reply(
+                `🗑️ <b>Delete Mistaken Clip</b>\n\n` +
+                `Usage: <code>/delclip Movie Title [Message ID]</code>\n` +
+                `Example: <code>/delclip Leo 452</code>\n\n` +
+                `<i>Tip: You can also just forward the clip from the DB channel to this chat!</i>`,
+                { parse_mode: 'HTML' }
+            );
+        }
+
+        const parts = args.includes('|') ? args.split('|') : args.split(/\s+(?=\d+$)/);
+        const movieTitle = parts[0]?.trim();
+        const msgId = parts[1]?.trim();
+
+        if (!movieTitle || !msgId) {
+            return ctx.reply('❌ Please specify both Movie Title and Message ID (e.g. <code>/delclip Leo 452</code>)', { parse_mode: 'HTML' });
+        }
+
+        const result = await removeSingleClip(movieTitle, msgId, ctx.api);
+        if (result.success) {
+            return ctx.reply(
+                `✅ <b>Clip Removed Successfully!</b>\n\n` +
+                `• <b>Movie:</b> 🎬 <code>${result.title}</code>\n` +
+                `• <b>Removed ID:</b> <code>${msgId}</code>\n` +
+                `• <b>Remaining Clips:</b> <code>${result.remaining}</code>`,
+                { parse_mode: 'HTML' }
+            );
+        } else {
+            return ctx.reply(`❌ ${result.message}`);
+        }
     });
 
     // ── Force Sub Menu ──────────────────────────────────────────────

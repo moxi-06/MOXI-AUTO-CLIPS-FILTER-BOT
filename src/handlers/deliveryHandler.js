@@ -728,6 +728,41 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             }
         }
 
+        // ── 5.5. Send Room Promotional Message (Delivery End Signoff) ──
+        try {
+            const promoStr = await getSetting('roomPromo', null);
+            if (promoStr) {
+                const promo = JSON.parse(promoStr);
+                let promoMsg = null;
+                const parseModeOpts = { parse_mode: 'HTML' };
+
+                if (promo.type === 'photo' && promo.fileId) {
+                    promoMsg = await ctx.api.sendPhoto(room.roomId, promo.fileId, {
+                        caption: promo.caption || undefined,
+                        ...parseModeOpts
+                    });
+                } else if (promo.type === 'video' && promo.fileId) {
+                    promoMsg = await ctx.api.sendVideo(room.roomId, promo.fileId, {
+                        caption: promo.caption || undefined,
+                        ...parseModeOpts
+                    });
+                } else if (promo.type === 'document' && promo.fileId) {
+                    promoMsg = await ctx.api.sendDocument(room.roomId, promo.fileId, {
+                        caption: promo.caption || undefined,
+                        ...parseModeOpts
+                    });
+                } else if (promo.type === 'text' && promo.text) {
+                    promoMsg = await ctx.api.sendMessage(room.roomId, promo.text, parseModeOpts);
+                }
+
+                if (promoMsg) {
+                    newMessageIds.push(promoMsg.message_id);
+                }
+            }
+        } catch (e) {
+            console.error('Room promo send error:', e.message);
+        }
+
         // ── 6. Save Room State with Message Tracking ─────────────────
         room.currentUserId = ctx.from.id.toString();
         room.lastMessageIds = newMessageIds;
