@@ -1,8 +1,8 @@
-const { Movie, Room, User } = require('../database');
-const { decodeMovieLink, sleep, sendToLogChannel, encodeMovieLink, escapeHtml } = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
+const { InlineKeyboard } = require('grammy');
 
 function getUserNameForLog(user) {
+    if (!user) return 'User';
     if (user.username) return `@${user.username}`;
     if (user.first_name) return user.first_name + (user.last_name ? ` ${user.last_name}` : '');
     return `User ${user.id}`;
@@ -24,6 +24,16 @@ const deleteTriggerMessage = async (ctx, ms = 10 * 60 * 1000) => {
     } catch (_) { }
 };
 
+// "Delete Old ➔ Send New" Notification Engine:
+// Deletes previous message to prevent chat clutter, sends fresh message to trigger notification/vibration & scroll
+const deleteOldAndSendNew = async (ctx, oldMsgId, text, options = {}) => {
+    if (oldMsgId) {
+        try { await ctx.api.deleteMessage(ctx.chat.id, oldMsgId); } catch (_) { }
+    }
+    const sendOpts = { parse_mode: 'HTML', disable_web_page_preview: true, ...options };
+    return await ctx.reply(text, sendOpts);
+};
+
 // ────────────────────────────────────────────────────────────────────
 // Force Subscribe Check
 // ────────────────────────────────────────────────────────────────────
@@ -33,12 +43,30 @@ async function checkForceSub(ctx) {
 
     try {
         const member = await ctx.api.getChatMember(forceSubChannel, ctx.from.id);
-        const allowed = ['member', 'administrator', 'creator'].includes(member.status);
-        return allowed;
+        return ['member', 'administrator', 'creator'].includes(member.status);
     } catch (e) {
         console.error('[ForceSub] Could not check membership:', e.message);
         return true; // Fail open if check errors
     }
+}
+
+// Helper to build the PM Home Dashboard Keyboard
+function buildUserDashboardKeyboard(isAdminUser = false) {
+    const groupLink = process.env.GROUP_LINK || '';
+    const keyboard = new InlineKeyboard();
+
+    if (groupLink) {
+        keyboard.url('👥 Open Search Group »', groupLink).row();
+    }
+    keyboard.text('🎬 All Movies', 'user_browse_0').text('🔥 Trending', 'user_trending').row();
+    keyboard.text('🎲 Random Movie', 'user_random').text('👤 My Profile', 'user_profile').row();
+    keyboard.text('💬 Contact Admin', 'user_contact');
+
+    if (isAdminUser) {
+        keyboard.row().text('⚙️ Admin Control Center', 'admin_panel');
+    }
+
+    return keyboard;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -56,25 +84,22 @@ module.exports = (bot) => {
         if (!messageText) {
             return ctx.reply(
                 `💬 <b>Contact Admin</b>\n\n` +
-                `Use: /contact <your message>\n\n` +
-                `Example: /contact Can you add movie X?`,
+                `Type: <code>/contact your message here</code>\n\n` +
+                `<i>Example: /contact Can you please add Leo clips?</i>`,
                 { parse_mode: 'HTML' }
             );
         }
 
-        // Send message to admin
         try {
             await bot.api.sendMessage(
                 adminId,
                 `📩 <b>User Message</b>\n\n` +
-                `👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n` +
-                `📝 Message: ${escapeHtml(messageText)}\n\n` +
                 `🔗 Reply to this message to reply back!`,
                 { parse_mode: 'HTML' }
             );
 
             ctx.reply(
-                `✅ <b>Message Sent!</b>\n\nYour message has been forwarded to admin.\n\n💬 You can reply again anytime with /contact <message>`,
+                `✅ <b>Message Sent!</b>\n\nYour message was forwarded to the admin.\nYou can reply anytime with <code>/contact message</code>.`,
                 { parse_mode: 'HTML' }
             );
         } catch (e) {
@@ -135,25 +160,21 @@ module.exports = (bot) => {
         if (ctx.chat.type !== 'private') return next();
 
         const adminId = process.env.ADMIN_ID;
+        if (!adminId || ctx.from.id.toString() !== adminId.toString()) return next();
+        if (!ctx.message.reply_to_message) return next();
 
-        // Only admin can reply to users through this
-        if (ctx.from.id.toString() !== adminId.toString()) return;
+        const replyText = ctx.message.reply_to_message.text || ctx.message.reply_to_message.caption || '';
+        const userIdMatch = replyText.match(/\[ID:\s*([0-9]+)\]/i) ||
+            replyText.match(/\(code\)([0-9]+)\(\/code\)/i) ||
+            replyText.match(/\b([0-9]{6,15})\b/);
+        if (!userIdMatch) return next();
 
-        // Check if this is a reply to admin's message
-        if (!ctx.message.reply_to_message) return;
-
-        const replyText = ctx.message.reply_to_message.text || '';
-
-        // Extract user ID from the original message
-        const userIdMatch = replyText.match(/\(code\)([0-9]+)\(\/code\)/);
-        if (!userIdMatch) return;
-
-        const userId = parseInt(userIdMatch[1]);
+        const userId = parseInt(userIdMatch[1], 10);
 
         try {
             await bot.api.sendMessage(
                 userId,
-                `💬 <b>Admin Reply</b>\n\n${ctx.message.text}`,
+                `💬 <b>Admin Reply:</b>\n\n${ctx.message.text}`,
                 { parse_mode: 'HTML' }
             );
             ctx.reply('✅ Reply sent to user!');
@@ -162,6 +183,177 @@ module.exports = (bot) => {
         }
     });
 
+    // ────────────────────────────────────────────────────────────────
+    // Interactive User Dashboard Callback Handlers (Zero Delay)
+    // ────────────────────────────────────────────────────────────────
+
+    // 1. PM All Movies Browser (with 10 items per page)
+    bot.callbackQuery(/^user_browse_(\d+)$/, async (ctx) => {
+        await ctx.answerCallbackQuery({ text: '⚡ Loading movies...' });
+        const page = parseInt(ctx.match[1], 10) || 0;
+        const limit = 10;
+        const total = await Movie.countDocuments();
+        const movies = await Movie.find({}, { title: 1, files: 1, messageIds: 1 })
+            .sort({ title: 1 })
+            .skip(page * limit)
+            .limit(limit)
+            .lean();
+
+        const keyboard = new InlineKeyboard();
+        movies.forEach(m => {
+            const count = m.files?.length || m.messageIds?.length || 0;
+            const startUrl = `https://t.me/${ctx.me?.username}?start=${encodeMovieLink(m)}`;
+            keyboard.url(`▫️ ${m.title.toUpperCase()} (${count})`, startUrl).row();
+        });
+
+        const totalPages = Math.ceil(total / limit);
+        const navRow = [];
+        if (page > 0) navRow.push({ text: '◀ Prev', callback_data: `user_browse_${page - 1}` });
+        if (page < totalPages - 1) navRow.push({ text: 'Next ▶', callback_data: `user_browse_${page + 1}` });
+        if (navRow.length > 0) keyboard.row(...navRow.map(b => InlineKeyboard.text(b.text, b.callback_data)));
+
+        keyboard.row().text('🔙 Back to Menu', 'user_home');
+
+        const text = `🎬 <b>Movie Archive</b> (Page ${page + 1}/${Math.max(totalPages, 1)})\n<i>Tap any movie below to get clips:</i>`;
+
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+    });
+
+    // 2. PM Trending Movies
+    bot.callbackQuery('user_trending', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const topMovies = await Movie.find().sort({ requests: -1 }).limit(5).lean();
+        const keyboard = new InlineKeyboard();
+
+        topMovies.forEach((m, idx) => {
+            const count = m.files?.length || m.messageIds?.length || 0;
+            const startUrl = `https://t.me/${ctx.me?.username}?start=${encodeMovieLink(m)}`;
+            keyboard.url(`🔥 #${idx + 1} ${m.title.toUpperCase()} (${count})`, startUrl).row();
+        });
+        keyboard.text('🔙 Back to Menu', 'user_home');
+
+        const text = `🔥 <b>Trending Movies</b>\n<i>Most requested by editors right now:</i>`;
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+    });
+
+    // 3. PM Random Movie
+    bot.callbackQuery('user_random', async (ctx) => {
+        await ctx.answerCallbackQuery({ text: '🎲 Rolling...' });
+        const count = await Movie.countDocuments();
+        if (count === 0) {
+            return ctx.answerCallbackQuery({ text: 'No movies found!', show_alert: true });
+        }
+        const randomIdx = Math.floor(Math.random() * count);
+        const randomMovie = await Movie.findOne().skip(randomIdx);
+        if (!randomMovie) return;
+
+        const clipCount = randomMovie.files?.length || randomMovie.messageIds?.length || 0;
+        const startUrl = `https://t.me/${ctx.me?.username}?start=${encodeMovieLink(randomMovie)}`;
+
+        const keyboard = new InlineKeyboard()
+            .url(`⚡ Get ${randomMovie.title.toUpperCase()} (${clipCount}) »`, startUrl).row()
+            .text('🎲 Roll Another', 'user_random')
+            .text('🔙 Menu', 'user_home');
+
+        const text = `🎲 <b>Random Pick:</b>\n\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+    });
+
+    // 4. PM User Profile
+    bot.callbackQuery('user_profile', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const user = await User.findOne({ userId: ctx.from.id });
+        const searches = user?.searchCount || 0;
+        const downloads = user?.downloadCount || 0;
+        const badge = user?.badges?.slice(-1)[0] || '🌟 MOXI NEWBIE';
+
+        let nextBadge = '5 downloads for ✨ MOXI MEMBER';
+        if (downloads >= 50) nextBadge = 'Max rank unlocked!';
+        else if (downloads >= 30) nextBadge = `${50 - downloads} more for 🔥 MOXI LEGEND`;
+        else if (downloads >= 15) nextBadge = `${30 - downloads} more for ⚡ MOXI STAR`;
+        else if (downloads >= 5) nextBadge = `${15 - downloads} more for 💫 MOXI PRO`;
+
+        const keyboard = new InlineKeyboard().text('🔙 Back to Menu', 'user_home');
+        const text = `👤 <b>Your Profile:</b> ${getUserNameForLog(ctx.from)}\n\n` +
+            `• Rank: <b>${badge}</b>\n` +
+            `• Searches: <b>${searches}</b>\n` +
+            `• Downloads: <b>${downloads} clips</b>\n\n` +
+            `📈 <i>${nextBadge}</i>`;
+
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+    });
+
+    // 5. PM Contact Prompt
+    bot.callbackQuery('user_contact', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const keyboard = new InlineKeyboard().text('🔙 Back to Menu', 'user_home');
+        const text = `💬 <b>Contact Admin</b>\n\n` +
+            `Send your message anytime by typing:\n` +
+            `<code>/contact your message here</code>\n\n` +
+            `<i>Our admin will review and reply directly to your chat!</i>`;
+
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+    });
+
+    // 6. Return to PM Home
+    bot.callbackQuery('user_home', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const isAdminUser = Boolean(process.env.ADMIN_ID && ctx.from.id.toString() === process.env.ADMIN_ID);
+        const keyboard = buildUserDashboardKeyboard(isAdminUser);
+        const text = `👋 <b>Welcome to Moxi Clips!</b>\n<i>Search any movie in our group to get clips delivered here.</i>`;
+
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) {
+            await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        }
+    });
+
+    // 7. Watch Tutorial
+    bot.callbackQuery('user_tutorial', async (ctx) => {
+        await ctx.answerCallbackQuery({ text: '💡 Sending tutorial...' });
+        try {
+            const tutStr = await getSetting('tutorial');
+            if (!tutStr) {
+                return ctx.reply('ℹ️ No tutorial video configured yet.', { parse_mode: 'HTML' });
+            }
+            const tutData = JSON.parse(tutStr);
+            const captionOpts = { caption: '💡 <b>How to verify link:</b>', parse_mode: 'HTML' };
+            if (tutData.type === 'video') {
+                await ctx.replyWithVideo(tutData.fileId, captionOpts);
+            } else if (tutData.type === 'document') {
+                await ctx.replyWithDocument(tutData.fileId, captionOpts);
+            } else if (tutData.type === 'link') {
+                await ctx.reply(`💡 <b>How to verify link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, { parse_mode: 'HTML', disable_web_page_preview: true });
+            }
+        } catch (e) {
+            console.error('Tutorial send error:', e.message);
+        }
+    });
+
+    // ────────────────────────────────────────────────────────────────
+    // Main /start Command (Payload delivery or Home menu)
+    // ────────────────────────────────────────────────────────────────
     bot.command('start', async (ctx, next) => {
         if (ctx.chat.type !== 'private') return next();
 
@@ -172,9 +364,8 @@ module.exports = (bot) => {
             { upsert: true, returnDocument: 'after' }
         );
 
-        // Log new user
         if (user.joinedAt && Date.now() - new Date(user.joinedAt).getTime() < 5000) {
-            await sendToLogChannel(bot, `👋 <b>New User Started Bot</b>\n\n👤 User: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\n🌐 Language: ${ctx.from.language_code || 'unknown'}`);
+            await sendToLogChannel(bot, `👋 <b>New User Started Bot</b>\n\n👤 User: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)`);
         }
 
         const payload = ctx.match;
@@ -186,38 +377,29 @@ module.exports = (bot) => {
             moviePayload = payload.substring(2);
         }
 
-        // ─── No Payload → Welcome ───────────────────────────────────
+        const isAdminUser = Boolean(process.env.ADMIN_ID && ctx.from.id.toString() === process.env.ADMIN_ID);
+
+        // ─── No Payload → Clean Minimal Home Dashboard ──────────────
         if (!moviePayload) {
+            const keyboard = buildUserDashboardKeyboard(isAdminUser);
             const welcome = await ctx.reply(
-                `👋 <b>WELCOME TO MOXI FILTERS!</b>\n\n` +
-                `I am your <b>Clips Assistant Bot</b> 🤖\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `🎬 <b>HOW TO GET CLIPS:</b>\n\n` +
-                `1️⃣ <b>Join our Group</b>\n` +
-                `   👉 ${process.env.GROUP_LINK ? `<a href="${process.env.GROUP_LINK}">Join Now! 🌟</a>` : '<b>Search in our group</b>'}\n\n` +
-                `2️⃣ <b>Type Movie Name</b>\n` +
-                `   <i>Example: Leo or Jawan</i>\n\n` +
-                `3️⃣ <b>Get Your Files</b>\n` +
-                `   I will deliver everything to your PM! 📬\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `💡 <b>QUICK TIPS:</b>\n` +
-                `• Type <code>/filters</code> to see all movies\n` +
-                `• Spelling doesn't matter, I'll fix it! ✨\n` +
-                `• Ask admin if clips are missing!\n\n` +
-                `🎉 <b>Enjoy Editing!</b> 🍿`,
-                { parse_mode: 'HTML', disable_web_page_preview: true }
+                `👋 <b>Welcome to Moxi Clips!</b>\n<i>Search any movie in our group to get clips delivered here.</i>`,
+                { parse_mode: 'HTML', reply_markup: keyboard }
             );
             autoDelete(ctx.api, ctx.chat.id, welcome.message_id);
             deleteTriggerMessage(ctx);
             return;
         }
 
-        // ─── Atomize Lock Check & Set ──────────────────────────────
+        // Delete trigger message (/start payload) to keep chat clean
+        try { await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id); } catch (_) { }
+
+        // ─── Concurrency Lock Check ─────────────────────────────────
         const lockoutResult = await User.findOneAndUpdate(
             {
                 userId: ctx.from.id,
                 $or: [
-                    { isDelivering: { $ne: true } }, // Match false or missing field
+                    { isDelivering: { $ne: true } },
                     { lastDeliveryAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }
                 ]
             },
@@ -234,83 +416,52 @@ module.exports = (bot) => {
         const releaseLock = async () => await User.findOneAndUpdate({ userId: ctx.from.id }, { isDelivering: false });
 
         if (!lockoutResult) {
-            // Already delivering (lock active)
-            return ctx.reply('⏳ <b>Please wait!</b>\n\nI am still preparing your previous request. Please wait a minute before starting a new one! ⏱️', { parse_mode: 'HTML' });
+            return ctx.reply('⏳ <b>Please wait!</b>\nYour previous request is still processing. Try again in a minute.', { parse_mode: 'HTML' });
         }
 
         // ─── Token Claim: /start token_USERID ───────────────────────
         if (moviePayload.startsWith('token_')) {
             const userId = moviePayload.replace('token_', '');
             if (ctx.from.id.toString() !== userId) {
-                const e = await ctx.reply('❌ This token link belongs to another user.');
+                const e = await ctx.reply('❌ This pass link belongs to another user.');
                 autoDelete(ctx.api, ctx.chat.id, e.message_id);
-                deleteTriggerMessage(ctx);
                 await releaseLock();
                 return;
             }
             const expiresAt = await grantToken(userId);
             const expireStr = expiresAt.toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
             const msg = await ctx.reply(
-                `🎫 <b>24-HOUR PASS ACTIVATED</b> 🎫\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `✅ <b>Status:</b> You're in!\n` +
-                `⏰ <b>Valid until:</b> Today at ${expireStr}\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `<i>You can now get clips from the group. Enjoy! 🎬</i>`,
+                `🎫 <b>24-Hour Pass Active!</b>\nValid until today at ${expireStr}.\nYou can now download unlimited clips!`,
                 { parse_mode: 'HTML' }
             );
             autoDelete(ctx.api, ctx.chat.id, msg.message_id);
             await releaseLock();
-            await sendToLogChannel(bot, `🎫 *Token Granted*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)`);
+            await sendToLogChannel(bot, `🎫 <b>Token Granted</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)`);
             return;
         }
 
         // ─── Movie Delivery: /start ENCODED_MOVIE ───────────────────
-        const movieName = decodeMovieLink(moviePayload);
-        if (!movieName) {
-            const e = await ctx.reply('❌ <b>Link Expired!</b>\n\nThis link is old. Please search again in our group! 👆');
-            autoDelete(ctx.api, ctx.chat.id, e.message_id);
-            deleteTriggerMessage(ctx);
-            await releaseLock();
-            return;
+        const decoded = decodeMovieLink(moviePayload);
+        let movie = null;
+        if (decoded && /^[0-9a-fA-F]{24}$/.test(decoded)) {
+            movie = await Movie.findById(decoded);
+        }
+        if (!movie && decoded) {
+            movie = await Movie.findOne({ title: decoded });
         }
 
-        const movie = await Movie.findOne({ title: movieName });
         if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
-            const e = await ctx.reply('❌ <b>Clips Not Available!</b>\n\nThis content is removed. Please ask admin to add it! 😢');
+            const e = await ctx.reply('❌ <b>Clips not found!</b>\nThis movie has been removed or does not exist.', { parse_mode: 'HTML' });
             autoDelete(ctx.api, ctx.chat.id, e.message_id);
-            deleteTriggerMessage(ctx);
             await releaseLock();
             return;
         }
 
-        // ─── Check Monetization Mode ─────────────────────────────────
+        const clipCount = movie.files?.length || movie.messageIds.length;
         const mode = await getSetting('mode', 'off');
 
-        const sendTutorialIfAny = async () => {
-            let tutorialMsgId = null;
-            try {
-                const tutStr = await getSetting('tutorial');
-                if (!tutStr) return null;
-                const tutData = JSON.parse(tutStr);
-                const captionOpts = { caption: '💡 <b>How to open the link:</b>', parse_mode: 'HTML' };
-                if (tutData.type === 'video') {
-                    const sent = await ctx.api.sendVideo(ctx.chat.id, tutData.fileId, captionOpts);
-                    tutorialMsgId = sent.message_id;
-                } else if (tutData.type === 'document') {
-                    const sent = await ctx.api.sendDocument(ctx.chat.id, tutData.fileId, captionOpts);
-                    tutorialMsgId = sent.message_id;
-                } else if (tutData.type === 'link') {
-                    const sent = await ctx.reply(`💡 <b>How to open the link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, { parse_mode: 'HTML', disable_web_page_preview: true });
-                    tutorialMsgId = sent.message_id;
-                }
-                if (tutorialMsgId) {
-                    autoDelete(ctx.api, ctx.chat.id, tutorialMsgId);
-                }
-            } catch (e) { console.error('Error sending tutorial:', e.message); }
-            return tutorialMsgId;
-        };
 
+        // ─── Mode: Token 24h Pass Required ──────────────────────────
         if (mode === 'token') {
             const validToken = await hasValidToken(ctx.from.id);
             if (!validToken) {
@@ -318,89 +469,83 @@ module.exports = (bot) => {
                 const tokenStartUrl = `https://t.me/${botUsername}?start=token_${ctx.from.id}`;
                 const wrappedUrl = await wrapShortlink(tokenStartUrl);
 
-                await sendTutorialIfAny();
+                const keyboard = new InlineKeyboard().url('⚡ Unlock 24h Free Pass »', wrappedUrl);
+                if (hasTutorial) keyboard.row().text('❓ Watch Tutorial Video', 'user_tutorial');
 
                 const msg = await ctx.reply(
-                    `🎫 <b>GET ACCESS PASS</b>\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                    `You need a <b>24-Hour Pass</b> to edit clips! 🎫\n\n` +
-                    `📝 <b>Easy Steps:</b>\n` +
-                    `1️⃣ Click the button below\n` +
-                    `2️⃣ Get your pass (it's free!)\n` +
-                    `3️⃣ Come back here to edit!\n\n` +
-                    `⏱️ <b>Time:</b> Only 30 seconds!\n\n` +
-                    `❤️ <i>Your support keeps us alive!</i>`,
-                    {
-                        parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: [[{ text: '🎫 Get Pass & Edit Clips', url: wrappedUrl }]] }
-                    }
+                    `🎫 <b>24-Hour Pass Required</b>\n` +
+                    `Get a free pass to download clips for 24 hours:\n\n` +
+                    `🎬 <b>${movie.title}</b> • <code>${clipCount} clips</code>`,
+                    { parse_mode: 'HTML', reply_markup: keyboard }
                 );
                 autoDelete(ctx.api, ctx.chat.id, msg.message_id);
                 await releaseLock();
-                await sendToLogChannel(bot, `🔒 *Token Required*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
+                await sendToLogChannel(bot, `🔒 <b>Token Prompted</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>`);
                 return;
             }
+
             const timeLeft = await getTokenExpiry(ctx.from.id);
             const waitMsg = await ctx.reply(
-                `🎫 <b>Pass Active</b> — ${timeLeft} left\n\n⏳ Getting your clips...`,
+                `🎫 <b>Pass Active</b> (${timeLeft} left)\n⏳ Preparing your clips for <b>${movie.title}</b>...`,
                 { parse_mode: 'HTML' }
             );
-            autoDelete(ctx.api, ctx.chat.id, waitMsg.message_id);
             deliverMovie(ctx, bot, movie, waitMsg.message_id).catch(e => console.error('Delivery Error:', e));
 
+        // ─── Mode: Shortlink Ad Verification Required ───────────────
         } else if (mode === 'shortlink' && !isVerified) {
             const botUsername = process.env.BOT_USERNAME || ctx.me?.username || '';
-            const verifiedStart = `https://t.me/${botUsername}?start=v_${moviePayload}`;
-
-            await sendTutorialIfAny();
-
-            const wrapMsg = await ctx.reply(
-                `🔗 <b>Preparing your link...</b>\n\n📽️ Movie: <b>${movie.title}</b>\n🎬 Clips: ${movie.files?.length || movie.messageIds.length}`,
-                { parse_mode: 'HTML' }
-            );
+            const verifiedStart = `https://t.me/${botUsername}?start=v_${encodeMovieLink(movie)}`;
             const wrappedUrl = await wrapShortlink(verifiedStart);
-            await ctx.api.editMessageText(
-                ctx.chat.id, wrapMsg.message_id,
-                `🎬 <b>${movie.title}</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `📂 <b>${movie.files?.length || movie.messageIds.length} Clips</b> are ready for you!\n\n` +
-                `🚀 <b>TAP THE BUTTON BELOW</b> to start!\n\n` +
-                `🔗 <i>Link opens your private movie room</i>`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: { inline_keyboard: [[{ text: '▶️ Get My Clips Now', url: wrappedUrl }]] }
-                }
+
+            const keyboard = new InlineKeyboard().url('🔵 Verify & Open Clips »', wrappedUrl);
+            if (hasTutorial) keyboard.row().text('❓ Watch Tutorial Video', 'user_tutorial');
+
+            const msg = await ctx.reply(
+                `🔗 <b>Unlock Clips:</b> <code>${movie.title}</code> (${clipCount} clips)\n` +
+                `<i>Verify the link below to get your clips:</i>`,
+                { parse_mode: 'HTML', reply_markup: keyboard }
             );
-            autoDelete(ctx.api, ctx.chat.id, wrapMsg.message_id);
+            autoDelete(ctx.api, ctx.chat.id, msg.message_id);
             await releaseLock();
-            await sendToLogChannel(bot, `🔗 <b>Shortlink Sent</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\nLink: ${wrappedUrl}\n\n#shortlink 📎`);
             return;
+
+        // ─── Mode: Free (Direct Dispatch) ───────────────────────────
         } else {
             const waitMsg = await ctx.reply(
-                `⏳ <b>Preparing your movies...</b>\n\n📽️ <b>${movie.title}</b>\n📂 ${movie.messageIds.length} clips\n\nPlease wait... ⏱️`,
+                `⏳ <b>Preparing clips:</b> <code>${movie.title}</code> (${clipCount} files)\n<i>Setting up your private room...</i>`,
                 { parse_mode: 'HTML' }
             );
-            autoDelete(ctx.api, ctx.chat.id, waitMsg.message_id);
             deliverMovie(ctx, bot, movie, waitMsg.message_id).catch(e => console.error('Delivery Error:', e));
         }
     });
-};
 
-// ────────────────────────────────────────────────────────────────────
-// Core Delivery — Force Sub check happens HERE (after monetization)
-// ────────────────────────────────────────────────────────────────────
-async function deliverMovie(ctx, bot, movie, waitMsgId) {
-    const { Room } = require('../database');
-    const { sendToLogChannel } = require('../utils/helpers');
-    const { getSetting } = require('../utils/monetization');
+    // ────────────────────────────────────────────────────────────────
+    // Force Sub "I've Joined" Callback (Instant 0ms Feedback)
+    // ────────────────────────────────────────────────────────────────
+    bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
+        await ctx.answerCallbackQuery({ text: '⚡ Checking membership...' });
 
-    try {
-        // ── Force Subscribe Check ────────────────────────────────────
+        const encodedMovieParam = ctx.match[1];
+        const decoded = decodeMovieLink(encodedMovieParam);
+        let movie = null;
+        if (decoded && /^[0-9a-fA-F]{24}$/.test(decoded)) {
+            movie = await Movie.findById(decoded);
+        }
+        if (!movie && decoded) {
+            movie = await Movie.findOne({ title: decoded });
+        }
+
+        if (!movie) {
+            return await deleteOldAndSendNew(ctx, ctx.callbackQuery.message.message_id,
+                '❌ Link expired. Please search for the movie again in the group.'
+            );
+        }
+
+        // Verify membership
         const isMember = await checkForceSub(ctx);
         if (!isMember) {
             const forceSubChannel = await getSetting('forceSubChannel', null);
             let joinUrl = forceSubChannel;
-            // If it's a username, make an invite link
             if (forceSubChannel && !forceSubChannel.startsWith('http')) {
                 try {
                     const chatInfo = await ctx.api.getChat(forceSubChannel);
@@ -410,37 +555,72 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 }
             }
 
-            await ctx.api.editMessageText(
-                ctx.chat.id, waitMsgId,
-                `📢 <b>One Last Step!</b>\n\n` +
-                `To receive your clips, you need to be a member of our main channel.\n\n` +
-                `<b>Why?</b> It keeps our community together and helps us keep in touch ! 🙏\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `1️⃣ Join the channel below\n` +
-                `2️⃣ Click "✅ Done!" to get your clips!`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '📢 Join Channel  →', url: joinUrl }],
-                            [{ text: '✅ Done! Check Now', callback_data: `fs_${encodeMovieLink(movie.title)}` }]
-                        ]
-                    }
-                }
+            const keyboard = new InlineKeyboard()
+                .url('🟣 Join Channel »', joinUrl).row()
+                .text('🟢 I\'ve Joined - Send Clips »', `fs_${encodeMovieLink(movie)}`);
+
+            return await deleteOldAndSendNew(ctx, ctx.callbackQuery.message.message_id,
+                `📢 <b>You haven't joined yet!</b>\nJoin our channel first, then tap the button below:`,
+                { reply_markup: keyboard }
             );
-            await sendToLogChannel(bot, `📢 *Force Sub Triggered*\nUser: ${getUserNameForLog(ctx.from)} (\`${ctx.from.id}\`)\nMovie: _${movie.title}_`);
+        }
+
+        if (!movie.messageIds?.length && !movie.files?.length) {
+            return await deleteOldAndSendNew(ctx, ctx.callbackQuery.message.message_id,
+                '❌ Clips are no longer available for this movie.'
+            );
+        }
+
+        await sendToLogChannel(bot, `✅ <b>Force Sub Verified</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>`);
+
+        // Delete the force-sub card and send a clean wait message
+        const waitMsg = await deleteOldAndSendNew(ctx, ctx.callbackQuery.message.message_id,
+            `✅ <b>Verified!</b> Setting up your private room for <b>${movie.title}</b>...`
+        );
+
+        deliverMovie(ctx, bot, movie, waitMsg.message_id).catch(e => console.error('Delivery Error:', e));
+    });
+};
+
+// ────────────────────────────────────────────────────────────────────
+// Core Delivery with Automatic Room Sanitization & Single-Use Links
+// ────────────────────────────────────────────────────────────────────
+async function deliverMovie(ctx, bot, movie, waitMsgId) {
+    try {
+        // ── 1. Force Subscribe Check ─────────────────────────────────
+        const isMember = await checkForceSub(ctx);
+        if (!isMember) {
+            const forceSubChannel = await getSetting('forceSubChannel', null);
+            let joinUrl = forceSubChannel;
+            if (forceSubChannel && !forceSubChannel.startsWith('http')) {
+                try {
+                    const chatInfo = await ctx.api.getChat(forceSubChannel);
+                    joinUrl = chatInfo.invite_link || `https://t.me/${forceSubChannel.replace('@', '')}`;
+                } catch (_) {
+                    joinUrl = `https://t.me/${forceSubChannel.replace('@', '')}`;
+                }
+            }
+
+            const keyboard = new InlineKeyboard()
+                .url('🟣 Join Channel »', joinUrl).row()
+                .text('🟢 I\'ve Joined - Send Clips »', `fs_${encodeMovieLink(movie)}`);
+
+            await deleteOldAndSendNew(ctx, waitMsgId,
+                `📢 <b>Join our channel to continue:</b>\n` +
+                `Join our channel below, then tap the button to receive your clips:`,
+                { reply_markup: keyboard }
+            );
+            await sendToLogChannel(bot, `📢 <b>Force Sub Triggered</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>`);
             return;
         }
 
-        // ── Assign Room ──────────────────────────────────────────────
+        // ── 2. Room Assignment from Pool ─────────────────────────────
         const freeRooms = await Room.find({ isBusy: false }).select('_id').lean();
         let room = null;
 
         if (freeRooms.length > 0) {
-            // Shuffle available free rooms to pick randomly
-            const shuffledRooms = freeRooms.sort(() => Math.random() - 0.5);
-            for (const r of shuffledRooms) {
-                // Try to claim the room (in case another promise claimed it first)
+            const shuffled = freeRooms.sort(() => Math.random() - 0.5);
+            for (const r of shuffled) {
                 room = await Room.findOneAndUpdate(
                     { _id: r._id, isBusy: false },
                     { isBusy: true, lastUsed: new Date() },
@@ -450,7 +630,6 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             }
         }
 
-        // If no free rooms left (or won by race conditions), pick the one used longest ago
         if (!room) {
             room = await Room.findOneAndUpdate(
                 {},
@@ -463,335 +642,147 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             const totalRooms = await Room.countDocuments();
             const msg = totalRooms === 0
                 ? '❌ The delivery system is not ready yet. Please notify the admin.'
-                : '❌ All delivery rooms are busy right now. Please try again in a moment.';
-            if (totalRooms === 0) {
-                await sendToLogChannel(bot, `🔴 *System Uninitialized* — User \`${ctx.from.id}\` tried delivery but 0 rooms exist.`);
-            } else {
-                await sendToLogChannel(bot, `🔴 *Room Exhaustion* — User \`${ctx.from.id}\` requested _${movie.title}_.`);
-            }
-            return ctx.api.editMessageText(ctx.chat.id, waitMsgId, msg);
+                : '❌ All delivery rooms are currently busy. Please try again in 1 minute.';
+            return await deleteOldAndSendNew(ctx, waitMsgId, msg);
         }
 
-        // ── Clean Room ──
+        // ── 3. Robust Room Sanitization (Kick user & wipe old messages) ──
         if (room.currentUserId) {
-            try {
-                await ctx.api.banChatMember(room.roomId, Number(room.currentUserId));
-                await sleep(500);
-                await ctx.api.unbanChatMember(room.roomId, Number(room.currentUserId));
-                await sleep(300);
-            } catch (e) {
-                if (!e.message.includes('can\'t remove chat owner') && !e.message.includes('not enough rights')) {
-                    console.error(`Kick failed for ${room.currentUserId}:`, e.message);
-                }
-            }
+            await safeKickRoomUser(ctx.api, room.roomId, room.currentUserId);
+        }
+        if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+            await safeDeleteRoomMessages(ctx.api, room.roomId, room.lastMessageIds);
         }
 
-        if (room.lastMessageIds?.length > 0) {
-            for (let i = 0; i < room.lastMessageIds.length; i += 100) {
-                try {
-                    await ctx.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
-                    await sleep(300);
-                } catch (_) { }
-            }
-        }
-
-        // ── Create Invite Link Immediately (before copying files) ──────────────────────
-        const expireDate = Math.floor(Date.now() / 1000) + 2 * 60 * 60;
+        // ── 4. Generate Single-Use Invite Link ─────────────────────────
+        const expireDate = Math.floor(Date.now() / 1000) + 2 * 60 * 60; // 2 hours
         const invite = await ctx.api.createChatInviteLink(room.roomId, {
             member_limit: 1,
             expire_date: expireDate,
-            name: `Delivery: ${movie.title.substring(0, 20)}`
+            name: `Moxi: ${movie.title.substring(0, 20)}`
         });
 
-        // Send the invite link immediately so user can join and wait
-        await ctx.api.editMessageText(
-            ctx.chat.id, waitMsgId,
-            `📤 <b>Preparing your room...</b>\n\n` +
-            `🎬 <i>${movie.title}</i>\n` +
-            `📂 ${movie.files?.length || movie.messageIds.length} clips\n\n` +
-            `⏳ <i>Joining now lets you watch while files copy...</i>\n\n` +
-            `🚀 <b>Your Room:</b>`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[{ text: '🚪 Join Room Now', url: invite.invite_link }]]
-                }
-            }
-        );
-
-        // ── Send Clips as Albums (batches of 10) ──────────────────────
+        // ── 5. Upload/Copy Clips to Room in Media Albums ──────────────
         let newMessageIds = [];
-
         const files = movie.files && movie.files.length > 0 ? movie.files : null;
 
         if (files) {
-            // ── New path: group by strict type to avoid Telegram errors ──
-            const groups = {};
-            files.forEach(f => {
-                let g = f.fileType;
-                // Photos, Videos, and Animations can coexist in a visual album
-                if (g === 'photo' || g === 'video' || g === 'animation') g = 'visual';
-                if (!groups[g]) groups[g] = [];
-                groups[g].push(f);
-            });
+            const visualItems = files.filter(f => ['photo', 'video', 'animation'].includes(f.fileType));
+            const otherItems = files.filter(f => !['photo', 'video', 'animation'].includes(f.fileType));
 
-            const sendBatch = async (items) => {
-                for (let i = 0; i < items.length; i += 10) {
-                    const chunk = items.slice(i, i + 10);
-                    const mediaGroup = chunk.map((f, idx) => {
-                        // In albums, 'animation' must be sent as 'video'
-                        let type = f.fileType;
-                        if (type === 'animation') type = 'video';
+            // Visual media groups (batches of 10)
+            for (let i = 0; i < visualItems.length; i += 10) {
+                const chunk = visualItems.slice(i, i + 10);
+                const mediaGroup = chunk.map((f, idx) => ({
+                    type: f.fileType === 'animation' ? 'video' : f.fileType,
+                    media: f.fileId,
+                    caption: (idx === 0 && f.caption) ? f.caption : undefined
+                }));
 
-                        const base = { type: type, media: f.fileId };
-                        if (idx === 0 && f.caption) base.caption = f.caption;
-                        return base;
-                    });
-                    try {
-                        const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
-                        if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
-                        await sleep(1500);
-                    } catch (e) {
-                        console.error(`[mediaBatch] sendMediaGroup failed:`, e.message);
-                        for (const f of chunk) {
-                            try {
-                                let m;
-                                if (f.fileType === 'video') m = await ctx.api.sendVideo(room.roomId, f.fileId, { caption: f.caption || undefined });
-                                else if (f.fileType === 'photo') m = await ctx.api.sendPhoto(room.roomId, f.fileId, { caption: f.caption || undefined });
-                                else if (f.fileType === 'document') m = await ctx.api.sendDocument(room.roomId, f.fileId, { caption: f.caption || undefined });
-                                else if (f.fileType === 'audio') m = await ctx.api.sendAudio(room.roomId, f.fileId, { caption: f.caption || undefined });
-                                else if (f.fileType === 'animation') m = await ctx.api.sendAnimation(room.roomId, f.fileId, { caption: f.caption || undefined });
-                                if (m) newMessageIds.push(m.message_id);
-                                await sleep(500);
-                            } catch (_) { }
-                        }
+                try {
+                    const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
+                    if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
+                    await sleep(1000);
+                } catch (e) {
+                    for (const f of chunk) {
+                        try {
+                            let m;
+                            if (f.fileType === 'video') m = await ctx.api.sendVideo(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            else if (f.fileType === 'photo') m = await ctx.api.sendPhoto(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            else m = await ctx.api.sendAnimation(room.roomId, f.fileId, { caption: f.caption || undefined });
+                            if (m) newMessageIds.push(m.message_id);
+                            await sleep(350);
+                        } catch (_) { }
                     }
                 }
-            };
+            }
 
-            for (const type of Object.keys(groups)) {
-                await sendBatch(groups[type]);
+            // Document & Audio items
+            for (const f of otherItems) {
+                try {
+                    let m;
+                    if (f.fileType === 'document') m = await ctx.api.sendDocument(room.roomId, f.fileId, { caption: f.caption || undefined });
+                    else if (f.fileType === 'audio') m = await ctx.api.sendAudio(room.roomId, f.fileId, { caption: f.caption || undefined });
+                    if (m) newMessageIds.push(m.message_id);
+                    await sleep(350);
+                } catch (_) { }
             }
         } else {
-            // ── Legacy path: copyMessages using stored messageIds ──
+            // Legacy path: copy by messageIds
             const dbChannel = process.env.DB_CHANNEL_ID;
             for (let i = 0; i < movie.messageIds.length; i += 10) {
                 const chunk = movie.messageIds.slice(i, i + 10);
                 try {
                     const copied = await ctx.api.copyMessages(room.roomId, dbChannel, chunk);
                     if (Array.isArray(copied)) newMessageIds.push(...copied.map(c => c.message_id));
-                    await sleep(1200);
+                    await sleep(1000);
                 } catch (e) {
                     for (const msgId of chunk) {
                         try {
                             const c = await ctx.api.copyMessage(room.roomId, dbChannel, msgId);
                             newMessageIds.push(c.message_id);
-                            await sleep(400);
+                            await sleep(350);
                         } catch (_) { }
                     }
                 }
             }
         }
 
-        // ── Save Room State ──────────────────────────────────────────
+        // ── 6. Save Room State with Message Tracking ─────────────────
         room.currentUserId = ctx.from.id.toString();
         room.lastMessageIds = newMessageIds;
         room.lastUsed = new Date();
         await room.save();
 
-        // Free the room after 1 hour grace period (so user can download clips) AND clean it
+        // ── 7. Auto-Purge Room Immediately When Grace Period Ends ──────
+        // Completely wipes messages and kicks occupant so the room is never left dirty!
         setTimeout(async () => {
             try {
-                // Delete old messages
-                if (room.lastMessageIds && room.lastMessageIds.length > 0) {
-                    try {
-                        await ctx.api.deleteMessages(room.roomId, room.lastMessageIds);
-                    } catch (_) { }
+                const currentRoom = await Room.findById(room._id);
+                if (currentRoom) {
+                    if (currentRoom.currentUserId) {
+                        await safeKickRoomUser(ctx.api, currentRoom.roomId, currentRoom.currentUserId);
+                    }
+                    if (currentRoom.lastMessageIds && currentRoom.lastMessageIds.length > 0) {
+                        await safeDeleteRoomMessages(ctx.api, currentRoom.roomId, currentRoom.lastMessageIds);
+                    }
+                    currentRoom.isBusy = false;
+                    currentRoom.currentUserId = null;
+                    currentRoom.lastMessageIds = [];
+                    await currentRoom.save();
+                    console.log(`🧹 Room ${currentRoom.roomId} auto-cleaned and reset after 30-min grace period.`);
                 }
-
-                // Remove user by ban + unban
-                if (room.currentUserId) {
-                    try {
-                        await ctx.api.banChatMember(room.roomId, Number(room.currentUserId));
-                        await sleep(500);
-                        await ctx.api.unbanChatMember(room.roomId, Number(room.currentUserId));
-                    } catch (_) { }
-                }
-
-                room.isBusy = false;
-                room.lastMessageIds = [];
-                room.currentUserId = null;
-                await room.save();
-                console.log(`✅ Room ${room.roomId} freed and cleaned after grace period`);
             } catch (e) {
-                console.error('Error freeing room:', e.message);
+                console.error('Error auto-cleaning room:', e.message);
             }
-        }, 60 * 60 * 1000); // 1 hour
+        }, 30 * 60 * 1000); // 30 minutes grace period
 
-        // ── Send Delivery Card ───────────────────────────────────────
-        await ctx.api.editMessageText(
-            ctx.chat.id, waitMsgId,
-            `✅ <b>ALL CLIPS READY !</b>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `🎬 <b>Movie:</b> <code>${movie.title}</code>\n` +
-            `📂 <b>Clips:</b> ${newMessageIds.length} Files\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `⚠️ <b>Note:</b>\n` +
-            `• Access expires in <b>2 hours</b>\n` +
-            `• One-time entry only\n\n` +
-            `🚀 <i>CLIPS ARE UPLOADED HERE!</i>`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[{ text: '🚪 Open My Clips  →', url: invite.invite_link }]]
-                }
-            }
-        );
+        // ── 8. "Delete Old ➔ Send New" Delivery Notification ──────────
+        const keyboard = new InlineKeyboard().url(`🟢 Open My Clips Room (${newMessageIds.length}) »`, invite.invite_link);
+        const cardText = `📦 <b>${movie.title}: ${newMessageIds.length} clips ready!</b>\n` +
+            `<i>Single-use download room is open for <b>30 minutes</b>:</i>`;
 
-        // Auto-delete delivery message after 10 minutes (keeps PM clean)
-        setTimeout(async () => {
-            try { await ctx.api.deleteMessage(ctx.chat.id, waitMsgId); } catch (_) { }
-        }, 10 * 60 * 1000);
+        const sentCard = await deleteOldAndSendNew(ctx, waitMsgId, cardText, { reply_markup: keyboard });
+        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, 30 * 60 * 1000);
 
-        // Track delivery stats
+        // Stats tracking
         global.todayStats.deliveries++;
-
-        // Update user download count and check badge
         try {
-            const user = await User.findOneAndUpdate(
+            await User.findOneAndUpdate(
                 { userId: ctx.from.id },
-                { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } },
-                { upsert: true, returnDocument: 'after' }
+                { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } }
             );
-
-            // Check if user earned a new badge (Moxi community themed)
-            let newBadge = null;
-            if (user.downloadCount >= 5 && !user.badges.includes('✨ MOXI MEMBER')) {
-                newBadge = '✨ MOXI MEMBER';
-                user.badges.push(newBadge);
-                await user.save();
-            } else if (user.downloadCount >= 15 && !user.badges.includes('💫 MOXI PRO')) {
-                newBadge = '💫 MOXI PRO';
-                user.badges.push(newBadge);
-                await user.save();
-            } else if (user.downloadCount >= 30 && !user.badges.includes('⚡ MOXI STAR')) {
-                newBadge = '⚡ MOXI STAR';
-                user.badges.push(newBadge);
-                await user.save();
-            } else if (user.downloadCount >= 50 && !user.badges.includes('🔥 MOXI LEGEND')) {
-                newBadge = '🔥 MOXI LEGEND';
-                user.badges.push(newBadge);
-                await user.save();
-            }
-
-            // Notify user of new badge
-            if (newBadge) {
-                try {
-                    await ctx.api.sendMessage(
-                        ctx.from.id,
-                        `🎉 <b>MOXI BADGE UNLOCKED!</b>\n\nYou earned: <b>${newBadge}</b>\n\nKeep using Moxi to level up! 🚀`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (_) { }
-            }
-        } catch (e) {
-            console.error('User badge error:', e);
-        }
-
-        // Get room name for logging
-        let roomName = room.roomId;
-        try {
-            const chatInfo = await ctx.api.getChat(room.roomId);
-            roomName = chatInfo.title || room.roomId;
         } catch (_) { }
 
-        await sendToLogChannel(bot, `✅ <b>DELIVERY SUCCESS</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>\nRoom: ${roomName} (<code>${room.roomId}</code>)\nClips: ${newMessageIds.length}\n\n#delivery 🚪`);
 
     } catch (error) {
         console.error('deliverMovie Error:', error);
-        await sendToLogChannel(bot, `❌ *Delivery Error*\nUser: ${ctx.from ? getUserNameForLog(ctx.from) : 'Unknown'} (\`${ctx.from?.id || 'N/A'}\`)\nError: _${error.message}_`);
+        await sendToLogChannel(bot, `❌ <b>Delivery Error</b>\nUser: ${getUserNameForLog(ctx.from)}\nError: <code>${error.message}</code>`);
         try {
-            await ctx.api.editMessageText(ctx.chat.id, waitMsgId,
-                '❌ Something went wrong during delivery.\n\nPlease try again in a moment.'
-            );
+            await deleteOldAndSendNew(ctx, waitMsgId, '❌ Something went wrong during delivery. Please try again in a moment.');
         } catch (_) { }
     } finally {
         await User.findOneAndUpdate({ userId: ctx.from.id }, { isDelivering: false });
     }
+}
 
-    // Handle Force Sub "I've Joined" callback
-    bot.callbackQuery(/^fs_(.+)$/, async (ctx) => {
-        await ctx.answerCallbackQuery();
-
-        const encodedMovieTitle = ctx.match[1];
-        const movieTitle = decodeMovieLink(encodedMovieTitle);
-
-        if (!movieTitle) {
-            try {
-                return await ctx.editMessageText(
-                    '❌ Link expired. Please search for the movie again in the group.',
-                    { parse_mode: 'HTML' }
-                );
-            } catch (e) {
-                if (!e.message.includes('message is not modified')) throw e;
-            }
-        }
-
-        // Check if user joined channel
-        const isMember = await checkForceSub(ctx);
-        if (!isMember) {
-            const forceSubChannel = await getSetting('forceSubChannel', null);
-            let joinUrl = forceSubChannel;
-            if (forceSubChannel && !forceSubChannel.startsWith('http')) {
-                try {
-                    const chatInfo = await ctx.api.getChat(forceSubChannel);
-                    joinUrl = chatInfo.invite_link || `https://t.me/${forceSubChannel.replace('@', '')}`;
-                } catch (_) {
-                    joinUrl = `https://t.me/${forceSubChannel.replace('@', '')}`;
-                }
-            }
-
-            return await ctx.editMessageText(
-                `📢 <b>You haven't joined yet!</b>\n\n` +
-                `Please join the channel first, then tap the button again.`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [
-                            [{ text: '📢 Join Channel', url: joinUrl }],
-                            [{ text: '✅ I\'ve Joined - Check Now', callback_data: `fs_${encodedMovieTitle}` }]
-                        ]
-                    }
-                }
-            );
-        }
-
-        // User joined - deliver movie
-        const movie = await Movie.findOne({ title: movieTitle });
-        if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
-            try {
-                return await ctx.editMessageText(
-                    '❌ Clips not available anymore. Please search for another movie.',
-                    { parse_mode: 'HTML' }
-                );
-            } catch (e) {
-                if (!e.message.includes('message is not modified')) throw e;
-            }
-        }
-
-        // Log force sub verified
-        await sendToLogChannel(bot, `✅ <b>Force Sub Verified</b>\n\n👤 User: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\n🎬 Movie: <i>${movie.title}</i>\n\n#verified 📢`);
-
-        try {
-            await ctx.editMessageText(
-                `✅ <b>Welcome back!</b>\n\n⏳ Preparing your clips...`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {
-            if (!e.message.includes('message is not modified')) throw e;
-        }
-
-        // Trigger delivery
-        deliverMovie(ctx, bot, movie, ctx.callbackQuery.message.message_id).catch(e => console.error('Delivery Error:', e));
-    });
-};

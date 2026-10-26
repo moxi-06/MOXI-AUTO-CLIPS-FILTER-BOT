@@ -55,26 +55,11 @@ const cleanMovieName = (title) => {
     return finalTitle.replace(/\s+/g, ' ').trim().toLowerCase();
 };
 
-const encodeMovieLink = (movieName) => {
-    // encode for start payload (max 64 chars, a-zA-Z0-9_- allowed)
-    // Telegram restricts start payloads heavily.
-    // Instead of full text, we can use base64 encoding, but base64 might have invalid chars (+, =)
-    return Buffer.from(movieName).toString('base64url');
-};
-
-const decodeMovieLink = (encodedName) => {
-    try {
-        return Buffer.from(encodedName, 'base64url').toString('utf-8');
-    } catch {
-        return null;
-    }
-};
-
 const extractMovieDetails = (title) => {
     let name = title;
     let credits = null;
 
-    if (title.includes('@')) {
+    if (title && title.includes('@')) {
         const parts = title.split('@');
         name = parts[0].replace(/[\s\-]+$/, '').trim();
         credits = '@' + parts.slice(1).join('@').trim();
@@ -83,13 +68,69 @@ const extractMovieDetails = (title) => {
     return { name, credits };
 };
 
-const sendToLogChannel = async (bot, message) => {
-    const logChannelId = process.env.LOG_CHANNEL_ID;
-    if (!logChannelId || !bot) return;
+const encodeMovieLink = (movie) => {
+    if (!movie) return '';
+    // If movie object with _id or 24-char hex string, use compact m_<id>
+    if (typeof movie === 'object' && movie._id) {
+        return `m_${movie._id}`;
+    }
+    if (typeof movie === 'string' && /^[0-9a-fA-F]{24}$/.test(movie)) {
+        return `m_${movie}`;
+    }
+    // Telegram restricts start payloads heavily (max 64 chars)
+    return Buffer.from(String(movie)).toString('base64url');
+};
+
+const decodeMovieLink = (encodedName) => {
+    if (!encodedName) return null;
     try {
-        await bot.api.sendMessage(logChannelId, message, { parse_mode: 'HTML' });
+        if (encodedName.startsWith('m_')) {
+            return encodedName.substring(2);
+        }
+        return Buffer.from(encodedName, 'base64url').toString('utf-8');
+    } catch {
+        return null;
+    }
+};
+
+const safeDeleteRoomMessages = async (api, roomId, messageIds) => {
+    if (!messageIds || messageIds.length === 0 || !api || !roomId) return;
+    for (let i = 0; i < messageIds.length; i += 100) {
+        const batch = messageIds.slice(i, i + 100);
+        try {
+            await api.deleteMessages(roomId, batch);
+        } catch (err) {
+            // Batch delete fails if ANY message ID is invalid or already deleted.
+            // Fall back to deleting individually to guarantee all clips are wiped!
+            for (const mid of batch) {
+                try {
+                    await api.deleteMessage(roomId, mid);
+                } catch (_) { }
+            }
+        }
+        await sleep(250);
+    }
+};
+
+const safeKickRoomUser = async (api, roomId, userId) => {
+    if (!api || !roomId || !userId) return;
+    try {
+        await api.banChatMember(roomId, Number(userId));
+        await sleep(350);
+        await api.unbanChatMember(roomId, Number(userId));
+    } catch (_) { }
+};
+
+const sendToLogChannel = async (botOrApi, message) => {
+    const logChannelId = process.env.LOG_CHANNEL_ID;
+    if (!logChannelId || !botOrApi || !message) return;
+    try {
+        const api = botOrApi.api || botOrApi;
+        if (typeof api.sendMessage === 'function') {
+            await api.sendMessage(logChannelId, message, { parse_mode: 'HTML' });
+        }
     } catch (e) {
-        console.error('Failed to send to log channel:', e.message);
+        // Silently catch so log channel errors never crash core bot operations
     }
 };
 
@@ -98,8 +139,10 @@ module.exports = {
     safeAnswerCallbackQuery,
     sleep,
     cleanMovieName,
+    extractMovieDetails,
     encodeMovieLink,
     decodeMovieLink,
     sendToLogChannel,
-    extractMovieDetails
+    safeDeleteRoomMessages,
+    safeKickRoomUser
 };

@@ -9,9 +9,10 @@ const { connectDB, Room, Movie: MovieModel, BotSettings } = require('./src/datab
 
 const adminHandler = require('./src/handlers/adminHandler');
 const indexHandler = require('./src/handlers/indexHandler');
+const chatGuardHandler = require('./src/handlers/chatGuardHandler');
 const searchHandler = require('./src/handlers/searchHandler');
 const deliveryHandler = require('./src/handlers/deliveryHandler');
-const { sleep } = require('./src/utils/helpers');
+const { safeDeleteRoomMessages, safeKickRoomUser } = require('./src/utils/helpers');
 
 // Global stats for live tracking
 global.todayStats = {
@@ -100,6 +101,7 @@ async function bootstrap() {
     }));
 
     // 3. Register route handlers
+    chatGuardHandler(bot);   // Handles group protection, anti-spam, and welcome
     adminHandler(bot);       // Handles group, channel, and global bot commands
     indexHandler(bot);       // Listens in DB channel to map messages to movies
     searchHandler(bot);      // Listens in groups for movie title queries
@@ -178,163 +180,60 @@ async function bootstrap() {
         });
     }
 
-    // --- Bot Startup: Clean all rooms ---
+    // --- Bot Startup: Robust Cleanup & Reset of All Rooms ---
     async function cleanupAllRoomsOnStartup() {
         try {
-            console.log('🧹 Cleaning all rooms on startup...');
+            console.log('🧹 Cleaning and resetting all rooms on startup...');
             const rooms = await Room.find();
 
             for (const room of rooms) {
+                if (room.currentUserId) {
+                    await safeKickRoomUser(bot.api, room.roomId, room.currentUserId);
+                }
                 if (room.lastMessageIds && room.lastMessageIds.length > 0) {
-                    try {
-                        // Delete messages in batches
-                        for (let i = 0; i < room.lastMessageIds.length; i += 100) {
-                            try {
-                                await bot.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
-                            } catch (_) { }
-                        }
-                        console.log(`✅ Cleaned room ${room.roomId}`);
-                    } catch (e) {
-                        console.error(`❌ Failed to clean room ${room.roomId}:`, e.message);
-                    }
+                    await safeDeleteRoomMessages(bot.api, room.roomId, room.lastMessageIds);
                 }
             }
 
-            // Reset all rooms
+            // Reset all rooms state
             await Room.updateMany({}, { lastMessageIds: [], currentUserId: null, isBusy: false });
-            console.log('✅ All rooms reset and cleaned on startup');
+            console.log('✅ All rooms fully sanitized and reset on startup');
         } catch (error) {
             console.error('❌ Startup cleanup error:', error.message);
         }
     }
     cleanupAllRoomsOnStartup();
 
-    // --- Reusable Room Cleanup Function ---
-    async function cleanupFreeRooms() {
-        const adminId = process.env.ADMIN_ID;
-        let cleanupErrors = [];
-
-        try {
-            const rooms = await Room.find({ isBusy: false });
-
-            for (const room of rooms) {
-                try {
-                    // Delete old messages in the room
-                    if (room.lastMessageIds && room.lastMessageIds.length > 0) {
-                        for (let i = 0; i < room.lastMessageIds.length; i += 100) {
-                            try {
-                                await bot.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
-                            } catch (e) {
-                                cleanupErrors.push(`Room ${room.roomId}: Failed to delete messages - ${e.message}`);
-                            }
-                        }
-                    }
-
-                    // Unban previous user if any (to clean up for next delivery)
-                    if (room.currentUserId) {
-                        try {
-                            await bot.api.unbanChatMember(room.roomId, Number(room.currentUserId));
-                        } catch (e) {
-                            cleanupErrors.push(`Room ${room.roomId}: Failed to unban user - ${e.message}`);
-                        }
-                    }
-
-                    // Reset the room
-                    room.lastMessageIds = [];
-                    room.currentUserId = null;
-                    await room.save();
-
-                    console.log(`✅ Cleaned room ${room.roomId}`);
-                } catch (e) {
-                    console.error(`❌ Failed to clean room ${room.roomId}:`, e.message);
-                    cleanupErrors.push(`Room ${room.roomId}: ${e.message}`);
-                }
-            }
-
-            // Notify admin if any errors occurred
-            if (cleanupErrors.length > 0 && adminId) {
-                try {
-                    await bot.api.sendMessage(
-                        adminId,
-                        `⚠️ <b>Room Cleanup Error</b>\n\n` +
-                        `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                        `Some rooms could not be cleaned:\n\n` +
-                        cleanupErrors.slice(0, 5).map(e => `• ${e}`).join('\n') +
-                        `\n\nPlease check manually using /rooms`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (_) { }
-            }
-
-            console.log(`✅ Room cleanup finished: ${rooms.length} rooms cleaned`);
-        } catch (error) {
-            console.error('❌ Room Cleanup Error:', error.message);
-            if (adminId) {
-                try {
-                    await bot.api.sendMessage(
-                        adminId,
-                        `⚠️ <b>Room Cleanup Failed</b>\n\nError: ${error.message}`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (_) { }
-            }
-        }
-    }
-
-    // --- Automatic Room Cleanup (every 15 minutes) ---
-    setInterval(async () => {
-        await cleanupFreeRooms();
-    }, 15 * 60 * 1000);
-
-    // --- Automatic stuck rooms release with cleanup (every 1 hour) ---
+    // --- Automatic Background Room Sanitization Watchdog (Runs Every 30 Minutes) ---
+    // Guarantees no room ever stays dirty or stuck with leftover files!
     setInterval(async () => {
         try {
-            console.log('🧹 Checking for stuck rooms...');
-
-            // Find rooms that are busy but past 1 hour since last used
-            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-            const stuckRooms = await Room.find({ 
-                isBusy: true, 
-                lastUsed: { $lte: oneHourAgo } 
+            // Check for rooms idle past the 30-minute grace period (+5 min buffer)
+            const thirtyFiveMinsAgo = new Date(Date.now() - 35 * 60 * 1000);
+            const expiredRooms = await Room.find({
+                $or: [
+                    { isBusy: true, lastUsed: { $lte: thirtyFiveMinsAgo } },
+                    { lastMessageIds: { $exists: true, $not: { $size: 0 } }, lastUsed: { $lte: thirtyFiveMinsAgo } }
+                ]
             });
 
-            for (const room of stuckRooms) {
-                try {
-                    // Delete old messages
-                    if (room.lastMessageIds && room.lastMessageIds.length > 0) {
-                        for (let i = 0; i < room.lastMessageIds.length; i += 100) {
-                            try {
-                                await bot.api.deleteMessages(room.roomId, room.lastMessageIds.slice(i, i + 100));
-                            } catch (_) { }
-                        }
-                    }
-
-                    // Ban and unban to remove user (if still in channel)
-                    if (room.currentUserId) {
-                        try {
-                            await bot.api.banChatMember(room.roomId, Number(room.currentUserId));
-                            await sleep(500);
-                            await bot.api.unbanChatMember(room.roomId, Number(room.currentUserId));
-                        } catch (_) { }
-                    }
-
-                    // Mark as free and reset
-                    room.isBusy = false;
-                    room.lastMessageIds = [];
-                    room.currentUserId = null;
-                    await room.save();
-
-                    console.log(`✅ Released & cleaned stuck room ${room.roomId}`);
-                } catch (e) {
-                    console.error(`❌ Failed to clean stuck room ${room.roomId}:`, e.message);
+            for (const room of expiredRooms) {
+                if (room.currentUserId) {
+                    await safeKickRoomUser(bot.api, room.roomId, room.currentUserId);
                 }
+                if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+                    await safeDeleteRoomMessages(bot.api, room.roomId, room.lastMessageIds);
+                }
+                room.isBusy = false;
+                room.currentUserId = null;
+                room.lastMessageIds = [];
+                await room.save();
+                console.log(`🧹 Watchdog sanitized and freed idle room ${room.roomId}`);
             }
-
-            console.log(`✅ Stuck room cleanup finished: ${stuckRooms.length} rooms processed`);
         } catch (error) {
-            console.error('❌ Stuck Rooms Error:', error.message);
+            console.error('❌ Room Watchdog Error:', error.message);
         }
-    }, 60 * 60 * 1000);
+    }, 30 * 60 * 1000); // Check every 30 minutes
 
     // --- Group Auto-Promoter (Every 5 hours) with rate limiting ---
     const GROUP_ID = process.env.GROUP_ID;

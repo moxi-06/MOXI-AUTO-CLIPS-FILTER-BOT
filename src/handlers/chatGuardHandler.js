@@ -7,50 +7,61 @@ function getUserNameForLog(user) {
 }
 
 module.exports = (bot) => {
-    // Welcome new members
-    bot.on('my_chat_member', async (ctx) => {
+    const sendWelcome = async (ctx, user) => {
+        if (!user || (ctx.me && user.id === ctx.me.id)) return;
+
+        // Log new group member
+        await sendToLogChannel(bot, `👥 <b>New Group Member</b>\n\n👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n📅 Joined: ${new Date().toLocaleString()}\n\n#newmember 👋`);
+
+        try {
+            const welcomeKeyboard = new (require('grammy')).InlineKeyboard()
+                .text('📖 Step-by-Step Guide', 'welcome_guide')
+                .text('🎬 See All Movies', 'welcome_movies').row()
+                .text('❓ Help', 'welcome_help');
+
+            await ctx.reply(
+                `👋 <b>WELCOME TO THE GROUP!</b>\n\n` +
+                `🎬 <b>Movie Clips Assistant</b> at your service!\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `🚀 <b>QUICK START:</b>\n` +
+                `1️⃣ Type any Movie Name here\n` +
+                `2️⃣ Tap the button I reply with\n` +
+                `3️⃣ Click the link in your PM\n` +
+                `4️⃣ All clips delivered instantly! 📬\n\n` +
+                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+                `💡 <b>Example:</b> <code>Leo</code> • <code>Jawan</code>\n\n` +
+                `🎯 <b>Try it now!</b> Type a movie name below 👇`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: welcomeKeyboard
+                }
+            );
+        } catch (e) {
+            console.error('Welcome message error:', e.message);
+        }
+    };
+
+    // Welcome new members when joining group
+    bot.on('message:new_chat_members', async (ctx) => {
+        const groupId = process.env.GROUP_ID;
+        if (!groupId || ctx.chat.id.toString() !== groupId) return;
+        if (ctx.message.date * 1000 < global.botStartedAt) return;
+
+        for (const user of ctx.message.new_chat_members) {
+            await sendWelcome(ctx, user);
+        }
+    });
+
+    // Also handle chat_member status change if bot is group admin
+    bot.on('chat_member', async (ctx) => {
         const groupId = process.env.GROUP_ID;
         if (!groupId || ctx.chat.id.toString() !== groupId) return;
 
-        // Skip old events
-        const eventDate = ctx.myChatMember.date * 1000;
-        if (eventDate < global.botStartedAt) return;
+        const oldStatus = ctx.chatMember.old_chat_member.status;
+        const newStatus = ctx.chatMember.new_chat_member.status;
 
-        const status = ctx.myChatMember.new_chat_member.status;
-
-        // User joined the group
-        if (status === 'member' || status === 'administrator') {
-            const user = ctx.myChatMember.new_chat_member.user;
-
-            // Log new group member
-            await sendToLogChannel(bot, `👥 <b>New Group Member</b>\n\n👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n📅 Joined: ${new Date().toLocaleString()}\n\n#newmember 👋`);
-
-            try {
-                const welcomeKeyboard = new (require('grammy')).InlineKeyboard()
-                    .text('📖 Step-by-Step Guide', 'welcome_guide')
-                    .text('🎬 See All Movies', 'welcome_movies').row()
-                    .text('❓ Help', 'welcome_help');
-
-                await ctx.reply(
-                    `👋 <b>WELCOME TO THE GROUP!</b>\n\n` +
-                    `🎬 <b>Movie Clips Assistant</b> at your service!\n\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                    `🚀 <b>QUICK START:</b>\n` +
-                    `1️⃣ Type any Movie Name here\n` +
-                    `2️⃣ Tap the button I reply with\n` +
-                    `3️⃣ Click the link in your PM\n` +
-                    `4️⃣ All clips delivered instantly! 📬\n\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                    `💡 <b>Example:</b> <code>Leo</code> • <code>Jawan</code>\n\n` +
-                    `🎯 <b>Try it now!</b> Type a movie name below 👇`,
-                    {
-                        parse_mode: 'HTML',
-                        reply_markup: welcomeKeyboard
-                    }
-                );
-            } catch (e) {
-                console.error('Welcome message error:', e);
-            }
+        if (['left', 'kicked'].includes(oldStatus) && ['member', 'administrator'].includes(newStatus)) {
+            await sendWelcome(ctx, ctx.chatMember.new_chat_member.user);
         }
     });
 

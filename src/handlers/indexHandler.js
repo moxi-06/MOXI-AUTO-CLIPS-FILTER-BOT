@@ -201,45 +201,37 @@ module.exports = (bot) => {
 
                 // Convert to chat ID if needed (for private channels)
                 let chatId = channelId;
-                if (!channelId.startsWith('-100')) {
+                if (/^\d+$/.test(channelId)) {
                     chatId = '-100' + channelId;
+                } else if (!channelId.startsWith('@') && !channelId.startsWith('-')) {
+                    chatId = '@' + channelId;
                 }
 
                 let foundThumbnail = null;
+                const tempChatId = process.env.LOG_CHANNEL_ID || ctx.chat.id;
 
                 for (let msgId = startMsg.messageId; msgId <= endMsg.messageId; msgId++) {
                     try {
-                        const msgs = await ctx.api.getMessages(chatId, [msgId]);
-                        const msg = Array.isArray(msgs) ? msgs[0] : msgs;
-
-                        console.log('Msg ' + msgId + ': photo=' + !!msg.photo + ', video=' + !!msg.video + ', doc=' + !!msg.document + ', anim=' + !!msg.animation);
-
-                        const fileInfo = extractFileInfo(msg);
+                        // In Telegram Bot API, inspect messages by staging via forwardMessage
+                        const fwdMsg = await ctx.api.forwardMessage(tempChatId, chatId, msgId);
+                        const fileInfo = extractFileInfo(fwdMsg);
 
                         // Detect thumbnail from first media found
                         if (!foundThumbnail) {
-                            if (msg.photo && msg.photo.length > 0) {
-                                // Use largest photo as thumbnail
-                                foundThumbnail = msg.photo[msg.photo.length - 1].file_id;
-                                console.log('Found photo thumbnail!');
-                            } else if (msg.video && msg.video.thumbnail) {
-                                // Use video thumbnail
-                                foundThumbnail = msg.video.thumbnail.file_id;
-                                console.log('Found video thumbnail!');
-                            } else if (msg.document && msg.document.thumbnail) {
-                                // Use document thumbnail
-                                foundThumbnail = msg.document.thumbnail.file_id;
-                                console.log('Found doc thumbnail!');
-                            } else if (msg.animation) {
-                                // Use animation/GIF
-                                foundThumbnail = msg.animation.file_id;
-                                console.log('Found animation!');
+                            if (fwdMsg.photo && fwdMsg.photo.length > 0) {
+                                foundThumbnail = fwdMsg.photo[fwdMsg.photo.length - 1].file_id;
+                            } else if (fwdMsg.video && fwdMsg.video.thumbnail) {
+                                foundThumbnail = fwdMsg.video.thumbnail.file_id;
+                            } else if (fwdMsg.document && fwdMsg.document.thumbnail) {
+                                foundThumbnail = fwdMsg.document.thumbnail.file_id;
+                            } else if (fwdMsg.animation) {
+                                foundThumbnail = fwdMsg.animation.file_id;
                             }
                         }
 
                         if (fileInfo) {
                             // Extract categories from caption too
-                            const captionCategories = extractCategories(msg.caption || '');
+                            const captionCategories = extractCategories(fwdMsg.caption || '');
                             const allCategories = [...new Set([...categories, ...captionCategories])];
 
                             await Movie.findOneAndUpdate(
@@ -257,6 +249,14 @@ module.exports = (bot) => {
                             addedCount++;
                         }
 
+                        // Clean up staged forward message immediately
+                        try {
+                            await ctx.api.deleteMessage(tempChatId, fwdMsg.message_id);
+                        } catch (_) { }
+
+                        // Rate limit protection
+                        await new Promise(r => setTimeout(r, 300));
+
                         // Update progress every 5 messages
                         if ((msgId - startMsg.messageId + 1) % 5 === 0 || msgId === endMsg.messageId) {
                             try {
@@ -271,7 +271,7 @@ module.exports = (bot) => {
                             } catch (_) { }
                         }
                     } catch (e) {
-                        console.log(`Could not get message ${msgId}: ${e.message}`);
+                        console.log(`Could not forward message ${msgId}: ${e.message}`);
                     }
                 }
 

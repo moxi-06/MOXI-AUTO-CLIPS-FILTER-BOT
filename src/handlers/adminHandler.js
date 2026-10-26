@@ -1,46 +1,94 @@
 const { Movie, Room, User, Token, BotSettings } = require('../database');
-const { cleanMovieName, sleep, sendToLogChannel } = require('../utils/helpers');
+const { cleanMovieName, sleep, sendToLogChannel, safeDeleteRoomMessages, safeKickRoomUser } = require('../utils/helpers');
 const { getSetting, setSetting } = require('../utils/monetization');
 const { InlineKeyboard } = require('grammy');
 
 global.MAINTENANCE = false;
 global.LOGS = [];
 global.broadcastStats = { total: 0, blocked: 0, failed: 0 };
+global.adminState = {}; // { [adminId]: { action: 'awaiting_tutorial' | 'awaiting_forcesub' | 'awaiting_room' } }
+global.pendingBroadcast = {};
 
 const logError = (err) => {
     const errorMsg = err.message || err.toString();
     global.LOGS.push(`[${new Date().toISOString()}] ${errorMsg}`);
-    if (global.LOGS.length > 20) global.LOGS.shift(); // keep last 20
+    if (global.LOGS.length > 20) global.LOGS.shift();
 };
 
 const isAdmin = (ctx) => {
     const adminId = process.env.ADMIN_ID;
-    return adminId && ctx.from && ctx.from.id.toString() === adminId;
+    return Boolean(adminId && ctx.from && ctx.from.id.toString() === adminId);
 };
 
 // List of admin-only commands to hide from normal users
 const adminCommands = [
-    'addmovie', 'deletemovie', 'addcategory', 'stats', 'top',
+    'admin', 'addmovie', 'deletemovie', 'addcategory', 'stats', 'top',
     'addroom', 'rooms', 'cleanroom', 'broadcast', 'maintenance',
     'logs', 'restartrooms', 'settings', 'setmode', 'setshortlink',
-    'setapikey', 'setforcesub', 'unsetforcesub', 'resetbot'
+    'setapikey', 'setforcesub', 'unsetforcesub', 'resetbot', 'unlock', 'resetstats'
 ];
+
+// Helper to build the main Admin Control Console
+async function renderAdminPanel(ctx, isEdit = false) {
+    const mode = await getSetting('mode', 'off');
+    const modeLabels = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 24h Pass' };
+    const forceSubChannel = await getSetting('forceSubChannel', null);
+    const tutStr = await getSetting('tutorial', null);
+
+    let tutorialDisplay = 'None ❌';
+    if (tutStr) {
+        try {
+            const parsed = JSON.parse(tutStr);
+            tutorialDisplay = parsed.type === 'link' ? 'Web Link 🔗' : `${parsed.type.toUpperCase()} 🎥`;
+        } catch (_) { tutorialDisplay = 'Active ✅'; }
+    }
+
+    const rooms = await Room.find();
+    const freeRooms = rooms.filter(r => !r.isBusy).length;
+    const busyRooms = rooms.filter(r => r.isBusy).length;
+    const maintenance = Boolean(global.MAINTENANCE);
+
+    const text = `⚙️ <b>ADMIN CONTROL CONSOLE</b>\n` +
+        `• <b>Mode:</b> ${modeLabels[mode] || mode}\n` +
+        `• <b>Force Sub:</b> <code>${forceSubChannel || 'Disabled'}</code>\n` +
+        `• <b>Tutorial Video:</b> <code>${tutorialDisplay}</code>\n` +
+        `• <b>Rooms:</b> <code>${freeRooms} Free / ${busyRooms} Busy (${rooms.length} Total)</code>\n` +
+        `• <b>Maintenance:</b> ${maintenance ? '<b>ON ⚠️</b>' : '<b>OFF ✅</b>'}\n\n` +
+        `<i>Tap any module below to configure:</i>`;
+
+    const keyboard = new InlineKeyboard()
+        .text('⚙️ Mode Switcher', 'admin_mode_menu')
+        .text('🎥 Tutorial Video', 'admin_tut_menu').row()
+        .text('📢 Force Sub', 'admin_forcesub_menu')
+        .text('🏠 Room Manager', 'admin_rooms_menu').row()
+        .text('📊 Live Analytics', 'admin_stats_view')
+        .text('📡 Broadcast', 'admin_bc_prompt').row()
+        .text(`🔒 Maintenance: ${maintenance ? 'ON' : 'OFF'}`, 'admin_maint_toggle')
+        .text('🔄 Refresh Panel', 'admin_panel');
+
+    if (isEdit) {
+        try {
+            return await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) { }
+    }
+    return await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+}
 
 module.exports = (bot) => {
     // Hide admin commands from non-admin users
     bot.use(async (ctx, next) => {
         const cmd = ctx.message?.text?.split(' ')[0]?.replace('/', '').toLowerCase();
         if (cmd && adminCommands.includes(cmd) && !isAdmin(ctx)) {
-            return; // Silently ignore admin commands from non-admins
+            return;
         }
         await next();
     });
 
-    // Top-level middleware to catch maintenance mode and errors
+    // Top-level middleware to catch maintenance mode
     bot.use(async (ctx, next) => {
         try {
             if (global.MAINTENANCE && !isAdmin(ctx) && ctx.chat?.type === 'private') {
-                return ctx.reply('⚠️ <b>Bot is under maintenance.</b> Please try again later.', { parse_mode: 'HTML' });
+                return ctx.reply('⚠️ <b>Bot is under maintenance.</b> Please try again shortly.', { parse_mode: 'HTML' });
             }
             await next();
         } catch (error) {
@@ -48,680 +96,346 @@ module.exports = (bot) => {
             console.error('Bot Pipeline Error:', error);
         }
     });
+    // ────────────────────────────────────────────────────────────────
+    // Interactive Admin Input Listener (Tutorial, ForceSub, Room ID)
+    // ────────────────────────────────────────────────────────────────
+    bot.on(['message:text', 'message:video', 'message:document'], async (ctx, next) => {
+        if (!isAdmin(ctx) || ctx.chat?.type !== 'private') return next();
 
-    // Public /help command - for all users (with pagination for admins)
-    bot.command('help', async (ctx) => {
-        const isAdminUser = isAdmin(ctx);
-        
-        // Page 1 - Basic User Guide
-        const page1 = `📖 HELP GUIDE\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `🎬 WHAT IS THIS BOT?\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `Get movie clips from our group!\n` +
-            `Search in group → Get clips in PM!\n\n` +
-            `📝 HOW TO GET CLIPS\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `Step 1: Join our group\n` +
-            `Step 2: Type a movie name\n` +
-            `Step 3: Tap the button I send\n` +
-            `Step 4: Get clips in PM! 📬\n\n` +
-            `📌 COMMANDS\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `/start - Start the bot\n` +
-            `/help - Show this guide\n` +
-            `/filters - Browse all movies\n` +
-            `/random - Random movie\n` +
-            `/trending - Top movies\n` +
-            `/myprofile - Your stats\n` +
-            `/todaystats - Today's activity\n` +
-            `/contact [text] - Contact admin\n\n` +
-            `💡 TIPS\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n` +
-            `✓ Don't worry about spelling!\n` +
-            `✓ I fix typos automatically\n` +
-            `✓ Use /filters to browse movies`;
+        const state = global.adminState[ctx.from.id];
+        if (!state) return next();
 
-        // Page 2 - Admin Commands
-        const page2 = `⚙️ ADMIN COMMANDS\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `📊 STATS\n` +
-            `------------------\n` +
-            `/stats - Full dashboard\n` +
-            `/resetstats - Reset stats\n` +
-            `/logs - View error logs\n\n` +
-            `🎬 MOVIES\n` +
-            `------------------\n` +
-            `/addmovie - Add movie\n` +
-            `/delmovie - Delete movie\n` +
-            `/rename - Rename movie\n` +
-            `/thumb - Set thumbnail\n` +
-            `/addcategory - Add category\n\n` +
-            `🏠 ROOMS\n` +
-            `------------------\n` +
-            `/addroom - Add room\n` +
-            `/rooms - View rooms\n` +
-            `/cleanroom - Clean room\n` +
-            `/restartrooms - Reset rooms\n\n` +
-            `📡 BROADCAST\n` +
-            `------------------\n` +
-            `/broadcast - Send to all users`;
+        // 1. Awaiting Tutorial Video/File/Link
+        if (state.action === 'awaiting_tutorial') {
+            let tutorialData = null;
+            if (ctx.message.video) {
+                tutorialData = { type: 'video', fileId: ctx.message.video.file_id };
+            } else if (ctx.message.document) {
+                tutorialData = { type: 'document', fileId: ctx.message.document.file_id };
+            } else if (ctx.message.text) {
+                if (ctx.message.text === '/cancel' || ctx.message.text.toLowerCase() === 'cancel') {
+                    delete global.adminState[ctx.from.id];
+                    return ctx.reply('❌ Tutorial update cancelled.', {
+                        reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                    });
+                }
+                tutorialData = { type: 'link', text: ctx.message.text.trim() };
+            }
 
-        const page3 = `⚙️ SETTINGS\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `/settings - View settings\n` +
-            `/setmode - Set mode\n` +
-            `/setshortlink - Set shortlink\n` +
-            `/setapikey - Set API key\n` +
-            `/setforcesub - Set force sub\n` +
-            `/unsetforcesub - Remove force sub\n` +
-            `/settutorial - Set tutorial\n` +
-            `/maintenance - Toggle mode\n\n` +
-            `🛠️ UTILITY\n` +
-            `------------------\n` +
-            `/top - Top movies\n` +
-            `/users - Clean users\n` +
-            `/resetbadges - Reset badges\n` +
-            `/resetbot - Reset bot\n` +
-            `/unlock - Unlock user\n` +
-            `/contact - Contact user`;
-
-        // Show different pages based on user and pagination
-        if (!isAdminUser) {
-            await ctx.reply(page1, { parse_mode: 'HTML' });
-        } else {
-            const keyboard = new InlineKeyboard()
-                .text('Page 1: User Guide', 'help_1')
-                .text('Page 2: Admin', 'help_2')
-                .text('Page 3: Settings', 'help_3');
-
-            await ctx.reply(page1 + `\n\n⚠️ Showing Page 1 of 3`, { parse_mode: 'HTML', reply_markup: keyboard });
+            if (tutorialData) {
+                delete global.adminState[ctx.from.id];
+                await setSetting('tutorial', JSON.stringify(tutorialData));
+                return ctx.reply('✅ <b>Tutorial Video Updated Successfully!</b>', {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('⚙️ Return to Admin Console', 'admin_panel')
+                });
+            }
         }
+
+        // 2. Awaiting Force Sub Channel ID or @username
+        if (state.action === 'awaiting_forcesub') {
+            const input = ctx.message.text?.trim();
+            if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
+                delete global.adminState[ctx.from.id];
+                return ctx.reply('❌ Force sub update cancelled.', {
+                    reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+                });
+            }
+            delete global.adminState[ctx.from.id];
+            await setSetting('forceSubChannel', input);
+            return ctx.reply(`✅ <b>Force Subscribe channel set to:</b> <code>${input}</code>`, {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('⚙️ Return to Admin Console', 'admin_panel')
+            });
+        }
+
+        // 3. Awaiting Room ID to add
+        if (state.action === 'awaiting_room') {
+            const input = ctx.message.text?.trim();
+            if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
+                delete global.adminState[ctx.from.id];
+                return ctx.reply('❌ Room registration cancelled.', {
+                    reply_markup: new InlineKeyboard().text('🏠 Rooms Menu', 'admin_rooms_menu')
+                });
+            }
+            delete global.adminState[ctx.from.id];
+            await Room.findOneAndUpdate({ roomId: input }, { isBusy: false, lastUsed: new Date() }, { upsert: true });
+            return ctx.reply(`✅ <b>Room <code>${input}</code> registered in pool!</b>`, {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('🏠 Room Manager', 'admin_rooms_menu').text('⚙️ Console', 'admin_panel')
+            });
+        }
+
+        await next();
     });
 
-    // Help pagination callbacks
-    bot.callbackQuery(/^help_(\d+)$/, async (ctx) => {
+    // ────────────────────────────────────────────────────────────────
+    // Interactive Admin Control Panel Commands & Callbacks
+    // ────────────────────────────────────────────────────────────────
+
+    // /admin Command
+    bot.command('admin', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        
-        const page = ctx.match[1];
-        
-        const pages = {
-            '1': `📖 HELP GUIDE\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `🎬 WHAT IS THIS BOT?\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `Get movie clips from our group!\n` +
-                `Search in group → Get clips in PM!\n\n` +
-                `📝 HOW TO GET CLIPS\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `Step 1: Join our group\n` +
-                `Step 2: Type a movie name\n` +
-                `Step 3: Tap the button I send\n` +
-                `Step 4: Get clips in PM! 📬\n\n` +
-                `📌 COMMANDS\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `/start - Start the bot\n` +
-                `/help - Show this guide\n` +
-                `/filters - Browse all movies\n` +
-                `/random - Random movie\n` +
-                `/trending - Top movies\n` +
-                `/myprofile - Your stats\n` +
-                `/todaystats - Today's activity\n` +
-                `/contact [text] - Contact admin\n\n` +
-                `💡 TIPS\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n` +
-                `✓ Don't worry about spelling!\n` +
-                `✓ I fix typos automatically\n` +
-                `✓ Use /filters to browse movies`,
-            '2': `⚙️ ADMIN COMMANDS\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `📊 STATS\n` +
-                `------------------\n` +
-                `/stats - Full dashboard\n` +
-                `/resetstats - Reset stats\n` +
-                `/logs - View error logs\n\n` +
-                `🎬 MOVIES\n` +
-                `------------------\n` +
-                `/addmovie - Add movie\n` +
-                `/delmovie - Delete movie\n` +
-                `/rename - Rename movie\n` +
-                `/thumb - Set thumbnail\n` +
-                `/addcategory - Add category\n\n` +
-                `🏠 ROOMS\n` +
-                `------------------\n` +
-                `/addroom - Add room\n` +
-                `/rooms - View rooms\n` +
-                `/cleanroom - Clean room\n` +
-                `/restartrooms - Reset rooms\n\n` +
-                `📡 BROADCAST\n` +
-                `------------------\n` +
-                `/broadcast - Send to all users`,
-            '3': `⚙️ SETTINGS & UTILITY\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `⚙️ SETTINGS\n` +
-                `------------------\n` +
-                `/settings - View settings\n` +
-                `/setmode - Set mode\n` +
-                `/setshortlink - Set shortlink\n` +
-                `/setapikey - Set API key\n` +
-                `/setforcesub - Set force sub\n` +
-                `/unsetforcesub - Remove force sub\n` +
-                `/settutorial - Set tutorial\n` +
-                `/maintenance - Toggle mode\n\n` +
-                `🛠️ UTILITY\n` +
-                `------------------\n` +
-                `/top - Top movies\n` +
-                `/users - Clean users\n` +
-                `/resetbadges - Reset badges\n` +
-                `/resetbot - Reset bot\n` +
-                `/unlock - Unlock user\n` +
-                `/contact - Contact user`
-        };
+        await renderAdminPanel(ctx, false);
+    });
 
-        const keyboard = new InlineKeyboard()
-            .text('Page 1: User', 'help_1')
-            .text('Page 2: Admin', 'help_2')
-            .text('Page 3: Settings', 'help_3');
-
+    // Main Console Callback
+    bot.callbackQuery('admin_panel', async (ctx) => {
+        if (!isAdmin(ctx)) return ctx.answerCallbackQuery({ text: 'Unauthorized', show_alert: true });
         await ctx.answerCallbackQuery();
-        try {
-            await ctx.editMessageText(pages[page] + `\n\n⚠️ Showing Page ${page} of 3`, { parse_mode: 'HTML', reply_markup: keyboard });
-        } catch (e) {
-            if (!e.message.includes('message is not modified')) {
-                throw e;
-            }
-        }
+        await renderAdminPanel(ctx, true);
     });
 
-    // Public /todaystats - shows today's activity in group
-    bot.command('todaystats', async (ctx) => {
-        const todaySearches = global.todayStats?.searches || 0;
-        const todayDeliveries = global.todayStats?.deliveries || 0;
-        const successRate = todaySearches > 0 ? Math.round((todayDeliveries / todaySearches) * 100) : 0;
-
-        await ctx.reply(
-            `📊 <b>TODAY'S ACTIVITY</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `🔍 <b>Searches:</b> ${todaySearches}\n` +
-            `📤 <b>Clips Delivered:</b> ${todayDeliveries}\n` +
-            `✅ <b>Success Rate:</b> ${successRate}%\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `💡 <b>Tip:</b> <i>Type a movie name to get clips!</i>`,
-            { parse_mode: 'HTML' }
-        );
-    });
-
-    // User profile with badges
-    bot.command('myprofile', async (ctx) => {
-        try {
-            const user = await User.findOne({ userId: ctx.from.id });
-
-            if (!user) {
-                return ctx.reply(
-                    `👤 <b>YOUR PROFILE</b>\n\n` +
-                    `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                    `🔍 <b>Searches:</b> 0\n` +
-                    `📥 <b>Downloads:</b> 0\n\n` +
-                    `🎖️ <b>Badges:</b> None yet!\n\n` +
-                    `💡 <i>Start searching movies to earn badges!</i>`,
-                    { parse_mode: 'HTML' }
-                );
-            }
-
-            const badges = user.badges.length > 0 ? user.badges.join('\n') : 'None yet!';
-
-            // Calculate progress to next badge
-            let progress = '';
-            if (user.downloadCount < 3) {
-                progress = `\n📈 Next badge at 3 downloads!`;
-            } else if (user.downloadCount < 10) {
-                progress = `\n📈 Next badge at 10 downloads!`;
-            } else if (user.downloadCount < 20) {
-                progress = `\n📈 Next badge at 20 downloads!`;
-            } else {
-                progress = `\n🎉 You have all badges!`;
-            }
-
-            await ctx.reply(
-                `👤 <b>YOUR PROFILE</b>\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `🔍 <b>Searches:</b> ${user.searchCount || 0}\n` +
-                `📥 <b>Downloads:</b> ${user.downloadCount || 0}\n\n` +
-                `🎖️ <b>Your Badges:</b>\n${badges}\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-                `${progress}`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {
-            console.error('Profile error:', e);
-            ctx.reply('❌ Error loading profile');
-        }
-    });
-
-    // Reset all user badges (admin only)
-    bot.command('resetbadges', async (ctx) => {
+    // ── Mode Switcher Menu ──────────────────────────────────────────
+    bot.callbackQuery('admin_mode_menu', async (ctx) => {
         if (!isAdmin(ctx)) return;
-
-        const confirmKeyboard = new InlineKeyboard()
-            .text('✅ Yes, Reset All', 'reset_badges_confirm')
-            .text('❌ Cancel', 'reset_badges_cancel');
-
-        await ctx.reply(
-            `⚠️ <b>RESET ALL BADGES?</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `This will remove ALL badges from ALL users.\n\n` +
-            `This action cannot be undone!`,
-            { parse_mode: 'HTML', reply_markup: confirmKeyboard }
-        );
-    });
-
-    // Confirm reset badges
-    bot.callbackQuery('reset_badges_confirm', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-
-        try {
-            const result = await User.updateMany(
-                {},
-                { $set: { badges: [], searchCount: 0, downloadCount: 0 } }
-            );
-
-            await ctx.answerCallbackQuery({ text: '✅ Badges reset!', show_alert: true });
-            await ctx.editMessageText(
-                `✅ <b>ALL BADGES RESET!</b>\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `👥 Users affected: ${result.modifiedCount}\n\n` +
-                `All badges, searches, and downloads cleared!`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {
-            console.error('Reset badges error:', e);
-            await ctx.answerCallbackQuery({ text: '❌ Error occurred', show_alert: true });
-        }
-    });
-
-    bot.callbackQuery('reset_badges_cancel', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        await ctx.answerCallbackQuery({ text: 'Cancelled', show_alert: false });
-        await ctx.editMessageText(`❌ <b>Reset Cancelled</b>`, { parse_mode: 'HTML' });
-    });
-
-    // Reset Bot - Delete all data
-    bot.command('resetbot', async (ctx) => {
-        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        const current = await getSetting('mode', 'off');
 
         const keyboard = new InlineKeyboard()
-            .text('✅ Yes, Delete All', 'resetbot_confirm')
-            .row()
-            .text('❌ No, Cancel', 'resetbot_cancel');
+            .text(`${current === 'off' ? '🟢 Free (Active)' : 'Free Mode'}`, 'setmode_off').row()
+            .text(`${current === 'shortlink' ? '🔗 Shortlink (Active)' : 'Shortlink Mode'}`, 'setmode_shortlink').row()
+            .text(`${current === 'token' ? '🎫 24h Pass (Active)' : '24h Token Pass Mode'}`, 'setmode_token').row()
+            .text('🔙 Back to Console', 'admin_panel');
 
-        await ctx.reply(
-            `⚠️ <b>RESET BOT</b>\n\n` +
-            `This will delete ALL data:\n` +
-            `• All movies & clips\n` +
-            `• All users\n` +
-            `• All settings\n` +
-            `• All tokens\n` +
-            `• All badges\n\n` +
-            `This cannot be undone!\n\n` +
-            `Are you sure?`,
+        await ctx.editMessageText(
+            `⚙️ <b>Select Monetization Mode:</b>\n\n` +
+            `• <b>Free:</b> Instant rooms with no ads.\n` +
+            `• <b>Shortlink:</b> Shortens direct verify link per request.\n` +
+            `• <b>24h Token Pass:</b> Users solve 1 link for 24h access.`,
             { parse_mode: 'HTML', reply_markup: keyboard }
         );
     });
 
-    bot.callbackQuery('resetbot_confirm', async (ctx) => {
+    bot.callbackQuery(/^setmode_(off|shortlink|token)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const newMode = ctx.match[1];
+        await setSetting('mode', newMode);
+        await ctx.answerCallbackQuery({ text: `✅ Switched to ${newMode.toUpperCase()}!` });
+        await renderAdminPanel(ctx, true);
+    });
+
+    // ── Tutorial Video Menu ─────────────────────────────────────────
+    bot.callbackQuery('admin_tut_menu', async (ctx) => {
         if (!isAdmin(ctx)) return;
         await ctx.answerCallbackQuery();
+        const tutStr = await getSetting('tutorial', null);
 
-        try {
-            await Movie.deleteMany({});
-            await User.deleteMany({});
-            await Token.deleteMany({});
-            await Room.deleteMany({});
-            await BotSettings.deleteMany({});
-
-            await ctx.editMessageText(
-                `✅ <b>RESET COMPLETE</b>\n\n` +
-                `All data has been deleted:\n` +
-                `• Movies: Deleted\n` +
-                `• Users: Deleted\n` +
-                `• Settings: Deleted\n` +
-                `• Tokens: Deleted\n\n` +
-                `Bot is now fresh!`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (error) {
-            await ctx.editMessageText(`❌ Error: ${error.message}`, { parse_mode: 'HTML' });
-        }
-    });
-
-    bot.callbackQuery('resetbot_cancel', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        await ctx.answerCallbackQuery({ text: 'Cancelled', show_alert: false });
-        await ctx.editMessageText(`❌ <b>Reset Cancelled</b>\n\nNo data was deleted.`, { parse_mode: 'HTML' });
-    });
-
-    // Group Admin Tools
-
-    bot.command('deletemovie', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const title = cleanMovieName(ctx.match);
-        const res = await Movie.deleteOne({ title });
-        ctx.reply(res.deletedCount > 0 ? `🗑️ Deleted: ${title}` : `❌ Not found: ${title}`);
-    });
-
-    // Add/update categories for existing movie
-    bot.command('addcategory', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const args = ctx.match.split('|');
-        if (args.length < 2) {
-            return ctx.reply(
-                `❌ <b>Usage:</b>\n` +
-                `/addcategory MovieName | hero,heroine,director\n\n` +
-                `📝 <b>Example:</b>\n` +
-                `/addcategory Leo | Rajinikanth,ManchuLakshmi,LokeshKanagaraj\n\n` +
-                `💡 This adds categories to existing movie!`,
-                { parse_mode: 'HTML' }
-            );
+        let statusText = '❌ No tutorial active.';
+        if (tutStr) {
+            try {
+                const parsed = JSON.parse(tutStr);
+                statusText = parsed.type === 'link' ? `🔗 Link: ${parsed.text}` : `🎥 Attached ${parsed.type.toUpperCase()}`;
+            } catch (_) { statusText = 'Active ✅'; }
         }
 
-        const title = cleanMovieName(args[0]);
-        const categories = args[1].split(',').map(c => c.trim()).filter(c => c.length > 0);
+        const keyboard = new InlineKeyboard()
+            .text('✏️ Change Video / Link', 'admin_tut_change').row()
+            .text('❌ Disable Tutorial', 'admin_tut_off').row()
+            .text('🔙 Back to Console', 'admin_panel');
 
-        const movie = await Movie.findOne({ title });
-        if (!movie) {
-            return ctx.reply(`❌ Movie not found: ${title}`);
-        }
-
-        movie.categories = [...new Set([...movie.categories, ...categories])];
-        await movie.save();
-
-        ctx.reply(
-            `✅ <b>Categories Updated!</b>\n\n` +
-            `🎬 <b>${movie.title}</b>\n` +
-            `👤 Categories: ${movie.categories.join(', ')}`,
-            { parse_mode: 'HTML' }
+        await ctx.editMessageText(
+            `🎥 <b>Tutorial Video Manager</b>\n\n` +
+            `<b>Status:</b> ${statusText}\n\n` +
+            `<i>Users will see a "Watch Tutorial" button in shortlink mode.</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
         );
     });
 
-    bot.command('stats', async (ctx) => {
+    bot.callbackQuery('admin_tut_change', async (ctx) => {
         if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_tutorial' };
+
+        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        await ctx.editMessageText(
+            `🎥 <b>SEND TUTORIAL VIDEO NOW:</b>\n\n` +
+            `• Forward or upload any video or document\n` +
+            `• Or paste a YouTube / Web video link\n\n` +
+            `<i>Send it below:</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery('admin_tut_off', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await setSetting('tutorial', null);
+        await ctx.answerCallbackQuery({ text: '✅ Tutorial disabled.' });
+        await renderAdminPanel(ctx, true);
+    });
+
+    // ── Force Sub Menu ──────────────────────────────────────────────
+    bot.callbackQuery('admin_forcesub_menu', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        const current = await getSetting('forceSubChannel', null);
+
+        const keyboard = new InlineKeyboard()
+            .text('✏️ Set / Change Channel', 'admin_forcesub_change').row()
+            .text('❌ Turn Off Force Sub', 'admin_forcesub_off').row()
+            .text('🔙 Back to Console', 'admin_panel');
+
+        await ctx.editMessageText(
+            `📢 <b>Force Subscribe Channel</b>\n\n` +
+            `<b>Current:</b> <code>${current || 'Disabled'}</code>\n\n` +
+            `<i>When active, users must join this channel before receiving clips.</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery('admin_forcesub_change', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_forcesub' };
+
+        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        await ctx.editMessageText(
+            `📢 <b>Send Channel ID or Username:</b>\n\n` +
+            `• Public Channel: <code>@channelname</code>\n` +
+            `• Private Channel: <code>-100XXXXXXXXXX</code>\n\n` +
+            `<i>Make sure the bot is an admin in that channel!</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    bot.callbackQuery('admin_forcesub_off', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await setSetting('forceSubChannel', null);
+        await ctx.answerCallbackQuery({ text: '✅ Force Sub turned off.' });
+        await renderAdminPanel(ctx, true);
+    });
+
+    // ── Room Pool Manager Menu ──────────────────────────────────────
+    bot.callbackQuery('admin_rooms_menu', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        const rooms = await Room.find();
+
+        let roomList = '';
+        rooms.forEach((r, idx) => {
+            roomList += `${idx + 1}. <code>${r.roomId}</code> • ${r.isBusy ? '🔴 Busy' : '🟢 Free'}\n`;
+        });
+        if (!roomList) roomList = 'No rooms registered yet.\n';
+
+        const keyboard = new InlineKeyboard()
+            .text('🧹 Clean & Free All Rooms Now', 'admin_clean_all_rooms').row()
+            .text('➕ Add New Room', 'admin_add_room').row()
+            .text('🔙 Back to Console', 'admin_panel');
+
+        await ctx.editMessageText(
+            `🏠 <b>Room Pool Manager (${rooms.length} Total)</b>\n\n${roomList}\n` +
+            `<i>Clean all rooms will kick occupants and delete leftover clips.</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Clean & Free All Rooms Action (Permanent bug fix for room cleanup)
+    bot.callbackQuery('admin_clean_all_rooms', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery({ text: '🧹 Cleaning all rooms...' });
+
+        const rooms = await Room.find();
+        let cleanedCount = 0;
+
+        for (const room of rooms) {
+            if (room.currentUserId) {
+                await safeKickRoomUser(ctx.api, room.roomId, room.currentUserId);
+            }
+            if (room.lastMessageIds && room.lastMessageIds.length > 0) {
+                await safeDeleteRoomMessages(ctx.api, room.roomId, room.lastMessageIds);
+            }
+            room.isBusy = false;
+            room.currentUserId = null;
+            room.lastMessageIds = [];
+            await room.save();
+            cleanedCount++;
+        }
+
+        await ctx.answerCallbackQuery({ text: `✅ Cleaned and freed ${cleanedCount} rooms!`, show_alert: true });
+        await renderAdminPanel(ctx, true);
+    });
+
+    bot.callbackQuery('admin_add_room', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_room' };
+
+        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        await ctx.editMessageText(
+            `🏠 <b>Add Room Channel:</b>\n\n` +
+            `Send the Telegram Channel ID (e.g. <code>-1002357848749</code>).\n\n` +
+            `<i>Make sure the bot is an admin with Invite & Delete rights!</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Cancel Active Input
+    bot.callbackQuery('admin_cancel_input', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        delete global.adminState[ctx.from.id];
+        await ctx.answerCallbackQuery({ text: 'Cancelled' });
+        await renderAdminPanel(ctx, true);
+    });
+
+    // ── Maintenance Mode Toggle ─────────────────────────────────────
+    bot.callbackQuery('admin_maint_toggle', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        global.MAINTENANCE = !global.MAINTENANCE;
+        await ctx.answerCallbackQuery({ text: `Maintenance: ${global.MAINTENANCE ? 'ENABLED ⚠️' : 'DISABLED ✅'}` });
+        await renderAdminPanel(ctx, true);
+    });
+
+    // ── Live Analytics View ─────────────────────────────────────────
+    bot.callbackQuery('admin_stats_view', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
 
         const totalMovies = await Movie.countDocuments();
         const totalUsers = await User.countDocuments();
-
-        // Calculate total clips
         const moviesWithClips = await Movie.find({}, { messageIds: 1, files: 1 });
         const totalClips = moviesWithClips.reduce((sum, m) => sum + (m.files?.length || m.messageIds?.length || 0), 0);
 
-        // Movies with thumbnails
-        const moviesWithThumb = await Movie.countDocuments({ thumbnail: { $ne: null } });
-
-        // Growth Analytics
-        const now = new Date();
-        const last24h = new Date(now - 24 * 60 * 60 * 1000);
-        const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
-        const last30d = new Date(now - 30 * 24 * 60 * 60 * 1000);
-
-        const usersLast24h = await User.countDocuments({ joinedAt: { $gte: last24h } });
-        const usersLast7d = await User.countDocuments({ joinedAt: { $gte: last7d } });
-        const usersLast30d = await User.countDocuments({ joinedAt: { $gte: last30d } });
-
-        // Calculate active users (users who searched or downloaded)
-        const activeUsers = await User.countDocuments({
-            $or: [{ searchCount: { $gt: 0 } }, { downloadCount: { $gt: 0 } }]
-        });
-
-        // Total searches & downloads
-        const allUsers = await User.find({}, { searchCount: 1, downloadCount: 1 });
-        const totalSearches = allUsers.reduce((sum, u) => sum + (u.searchCount || 0), 0);
-        const totalDownloads = allUsers.reduce((sum, u) => sum + (u.downloadCount || 0), 0);
-
-        // Top searched movies
-        const topMovies = await Movie.find().sort({ requests: -1 }).limit(10);
-
-        // Top downloaders
-        const topUsers = await User.find().sort({ downloadCount: -1 }).limit(10);
-
-        // Room status
-        const rooms = await Room.find();
-        const freeRooms = rooms.filter(r => !r.isBusy).length;
-        const busyRooms = rooms.filter(r => r.isBusy).length;
-
-        // Today's stats
         const todaySearches = global.todayStats?.searches || 0;
         const todayDeliveries = global.todayStats?.deliveries || 0;
 
-        // Week stats
-        const weekSearches = Math.round(todaySearches * 7); // Approximate
-        const weekDeliveries = Math.round(todayDeliveries * 7);
-
-        // Bot uptime
-        const botUptime = process.uptime ? Math.floor(process.uptime() / 60) : 0;
-        const uptimeHours = Math.floor(botUptime / 60);
-
-        // Maintenance mode check
-        const maintenanceMode = process.env.MAINTENANCE_MODE === 'true' || global.maintenanceMode;
-
-        // Monetization status
-        const mode = await getSetting('monetizationMode') || 'off';
-
-        // Build the stats message
-        let statsText = `📊 DASHBOARD\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
-
-        // OVERVIEW SECTION
-        statsText += `📈 OVERVIEW\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `🎬 Movies: ${totalMovies} | 📹 Clips: ${totalClips}\n`;
-        statsText += `👥 Users: ${totalUsers} | ✅ Active: ${activeUsers}\n`;
-        statsText += `🖼️ Thumbnails: ${moviesWithThumb}/${totalMovies}\n\n`;
-
-        // TODAY SECTION
-        statsText += `📅 TODAY\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `🔍 Searches: ${todaySearches}\n`;
-        statsText += `📤 Delivered: ${todayDeliveries}\n`;
-        statsText += `📊 Success: ${todaySearches > 0 ? Math.round((todayDeliveries / todaySearches) * 100) : 0}%\n\n`;
-
-        // WEEK SECTION
-        statsText += `📆 THIS WEEK\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `👥 New Users: ${usersLast7d}\n`;
-        statsText += `🔍 Searches: ~${weekSearches}\n`;
-        statsText += `📤 Delivered: ~${weekDeliveries}\n\n`;
-
-        // MONTH SECTION
-        statsText += `🗓️ THIS MONTH\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `👥 New Users: ${usersLast30d}\n`;
-        statsText += `🔍 Total Searches: ${totalSearches}\n`;
-        statsText += `📤 Total Downloads: ${totalDownloads}\n\n`;
-
-        // ROOMS SECTION
-        statsText += `🏠 ROOMS\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `🟢 Free: ${freeRooms} | 🔴 Busy: ${busyRooms}\n`;
-        statsText += `📊 Total: ${rooms.length}\n\n`;
-
-        // SYSTEM SECTION
-        statsText += `⚙️ <b>SYSTEM</b>\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `⏱️ <b>Uptime:</b> ${uptimeHours} Hours\n`;
-        statsText += `🔧 <b>Mode:</b> ${mode.toUpperCase()}\n`;
-        statsText += `🔒 <b>Maintenance:</b> ${maintenanceMode ? 'ACTIVE ⚠️' : 'CLEAN ✅'}\n`;
-
-        if (topMovies.length > 0) {
-            statsText += `\n🔥 TOP MOVIES\n`;
-            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-            topMovies.forEach((m, i) => {
-                const clipCount = m.files?.length || m.messageIds?.length || 0;
-                statsText += `${i + 1}. ${m.title} - ${m.requests} searches | ${clipCount} clips\n`;
-            });
-        }
-
-        if (topUsers.length > 0) {
-            statsText += `\n⭐ TOP DOWNLOADERS\n`;
-            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-            topUsers.forEach((u, i) => {
-                statsText += `${i + 1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
-            });
-        }
-
-        statsText += `\n━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `Type /stats for this dashboard\n`;
-
         const keyboard = new InlineKeyboard()
-            .text('🔄 Refresh', 'stats_refresh');
+            .text('🔄 Refresh', 'admin_stats_view')
+            .text('🔙 Back', 'admin_panel');
 
-        ctx.reply(statsText, { parse_mode: 'HTML', reply_markup: keyboard });
+        const text = `📊 <b>LIVE METRICS</b>\n\n` +
+            `• Movies: <b>${totalMovies}</b>\n` +
+            `• Total Clips: <b>${totalClips}</b>\n` +
+            `• Registered Users: <b>${totalUsers}</b>\n\n` +
+            `📅 <b>Today's Activity:</b>\n` +
+            `• Searches: <b>${todaySearches}</b>\n` +
+            `• Deliveries: <b>${todayDeliveries}</b>`;
+
+        try {
+            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+        } catch (_) { }
     });
 
-
-    bot.command('top', async (ctx) => {
+    // ── Broadcast Manager Prompt ────────────────────────────────────
+    bot.callbackQuery('admin_bc_prompt', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const topMovies = await Movie.find().sort({ requests: -1 }).limit(10);
-
-        if (topMovies.length === 0) {
-            return ctx.reply('No movies yet!');
-        }
-
-        const keyboard = new InlineKeyboard();
-        topMovies.forEach((m, i) => {
-            const icon = i === 0 ? '👑' : '🎬';
-            keyboard.text(`${icon} ${m.title}`, `top_${m.title}`).row();
-        });
-
-        let text = `🔥 TOP MOVIES\n`;
-        text += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        topMovies.forEach((m, i) => {
-            const icon = i === 0 ? '👑' : '🔸';
-            text += `${icon} ${i + 1}. ${m.title} - ${m.requests} searches\n`;
-        });
-
-        text += `\n━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        text += `Tap a movie to get clips!`;
-
-        await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
-    });
-
-    // Channel Admin Tools
-    bot.command('addroom', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        if (!ctx.match) return ctx.reply('Usage: /addroom -100XXXXXX (Use Channel ID)');
-        const roomId = ctx.match.trim();
-        await Room.findOneAndUpdate({ roomId }, { isBusy: false }, { upsert: true, returnDocument: 'after' });
-        ctx.reply(`✅ Room ${roomId} mapped to your room pool!`);
-    });
-
-    bot.command('rooms', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const rooms = await Room.find();
-        let text = `🏠 <b>Room Pool Status (${rooms.length} Total)</b>\n\n`;
-        rooms.forEach((r, i) => text += `Room ${i + 1} [<code>${r.roomId}</code>]: ${r.isBusy ? '🔴 Busy' : '🟢 Free'}\n`);
-        ctx.reply(text, { parse_mode: 'HTML' });
-    });
-
-    // Interactive room cleanup - shows buttons for each room
-    bot.command('cleanroom', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-
-        const rooms = await Room.find();
-        if (rooms.length === 0) return ctx.reply('❌ No rooms configured.');
-
-        const keyboard = new InlineKeyboard();
-        for (const room of rooms) {
-            const status = room.isBusy ? '🔴' : '🟢';
-            keyboard.text(`${status} ${room.roomId}`, `clean_${room.roomId}`).row();
-        }
-
-        await ctx.reply(
-            `🧹 <b>Select Room to Clean</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `Tap a room to clean it:\n` +
-            `• Remove member (ban + unban)\n` +
-            `• Delete all files/messages\n` +
-            `• Mark as FREE\n\n` +
-            `⚠️ This may take time due to API limits`,
+        await ctx.answerCallbackQuery();
+        const keyboard = new InlineKeyboard().text('🔙 Back to Console', 'admin_panel');
+        await ctx.editMessageText(
+            `📡 <b>Broadcast to All Users</b>\n\n` +
+            `To send a broadcast:\n` +
+            `1. Reply to any message/media with <code>/broadcast</code>\n` +
+            `2. Or type: <code>/broadcast your text here</code>\n\n` +
+            `<i>A confirmation preview will show before sending!</i>`,
             { parse_mode: 'HTML', reply_markup: keyboard }
         );
     });
 
-    // Handle room clean button callback
-    bot.callbackQuery(/^clean_(.+)$/, async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const roomId = ctx.match[1];
 
-        await ctx.answerCallbackQuery();
-
-        const room = await Room.findOne({ roomId });
-        if (!room) return ctx.editMessageText(`❌ Room not found: ${roomId}`);
-
-        await ctx.editMessageText(
-            `🧹 <b>Cleaning Room...</b>\n\nRoom: <code>${roomId}</code>\n⏳ Please wait...`,
-            { parse_mode: 'HTML' }
-        );
-
-        let cleaned = false;
-        let errors = [];
-
-        // Step 1: Delete messages (with API limit handling)
-        if (room.lastMessageIds && room.lastMessageIds.length > 0) {
-            try {
-                for (let i = 0; i < room.lastMessageIds.length; i += 100) {
-                    const chunk = room.lastMessageIds.slice(i, i + 100);
-                    try {
-                        await ctx.api.deleteMessages(roomId, chunk);
-                        await sleep(1000); // Wait 1 second between batches
-                    } catch (e) {
-                        errors.push(`Delete batch ${i}: ${e.message}`);
-                    }
-                }
-                cleaned = true;
-            } catch (e) {
-                errors.push(`Delete: ${e.message}`);
-            }
-        }
-
-        // Step 2: Remove member (ban + unban)
-        if (room.currentUserId) {
-            try {
-                await ctx.api.banChatMember(roomId, Number(room.currentUserId));
-                await sleep(1000);
-                await ctx.api.unbanChatMember(roomId, Number(room.currentUserId));
-                await sleep(1000);
-                cleaned = true;
-            } catch (e) {
-                errors.push(`Ban/Unban: ${e.message}`);
-            }
-        }
-
-        // Step 3: Reset room status
-        room.isBusy = false;
-        room.currentUserId = null;
-        room.lastMessageIds = [];
-        await room.save();
-
-        const errorMsg = errors.length > 0 ? `\n⚠️ Errors: ${errors.join(', ')}` : '';
-        await ctx.editMessageText(
-            `✅ <b>Room Cleaned</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `Room: <code>${roomId}</code>\n` +
-            `🗑️ Messages: ${cleaned ? 'Deleted' : 'None'}\n` +
-            `👤 Member: ${room.currentUserId ? 'Removed' : 'None'}\n` +
-            `🟢 Status: FREE\n${errorMsg}`,
-            { parse_mode: 'HTML' }
-        );
-    });
-
-    // Bot Admin Tools
-    // Store pending broadcast messages
-    global.pendingBroadcast = {};
-
+    // Broadcast Command
     bot.command('broadcast', async (ctx) => {
         if (!isAdmin(ctx)) return;
 
         let msgToBroadcast = null;
-
         if (ctx.message.reply_to_message) {
             msgToBroadcast = {
                 type: 'copy',
@@ -729,62 +443,41 @@ module.exports = (bot) => {
                 messageId: ctx.message.reply_to_message.message_id
             };
         } else if (ctx.match) {
-            msgToBroadcast = {
-                type: 'text',
-                text: ctx.match
-            };
+            msgToBroadcast = { type: 'text', text: ctx.match };
         } else {
-            return ctx.reply('❌ Usage: `/broadcast [text]` OR reply to any message (photo/video/etc) with `/broadcast`', { parse_mode: 'Markdown' });
+            return ctx.reply('❌ Usage: <code>/broadcast [text]</code> or reply to a message with <code>/broadcast</code>', { parse_mode: 'HTML' });
         }
 
         const users = await User.find();
         const keyboard = new InlineKeyboard()
-            .text('✅ Yes, Send', `bc_yes_${ctx.from.id}`)
+            .text('✅ Send Now', `bc_yes_${ctx.from.id}`)
             .text('❌ Cancel', `bc_no_${ctx.from.id}`);
 
-        const sent = await ctx.reply(
+        await ctx.reply(
             `📡 <b>BROADCAST PREVIEW</b>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `📝 <b>Type:</b> ${msgToBroadcast.type === 'copy' ? 'Forwarded Media/Message' : 'Text Message'}\n` +
-            `👥 <b>Target:</b> ${users.length} users\n\n` +
-            `⚠️ This will send to all users!`,
+            `• Target: <b>${users.length} users</b>\n` +
+            `• Type: <b>${msgToBroadcast.type === 'copy' ? 'Media / Forward' : 'Text Message'}</b>\n\n` +
+            `<i>Are you sure you want to send this to all users?</i>`,
             { parse_mode: 'HTML', reply_markup: keyboard }
         );
 
-        // Store pending broadcast
         global.pendingBroadcast[ctx.from.id] = { msgData: msgToBroadcast, users: users.length };
     });
 
-    // Broadcast confirmation handlers
     bot.callbackQuery(/^bc_yes_(\d+)$/, async (ctx) => {
         if (!isAdmin(ctx)) return;
         const adminId = ctx.match[1];
-
-        if (ctx.from.id.toString() !== adminId) {
-            await ctx.answerCallbackQuery({ text: '❌ Not authorized', show_alert: true });
-            return;
-        }
+        if (ctx.from.id.toString() !== adminId) return ctx.answerCallbackQuery({ text: 'Unauthorized', show_alert: true });
 
         const pending = global.pendingBroadcast[adminId];
-        if (!pending) {
-            await ctx.answerCallbackQuery({ text: '⚠️ No pending broadcast', show_alert: true });
-            return;
-        }
+        if (!pending) return ctx.answerCallbackQuery({ text: 'No pending broadcast', show_alert: true });
 
-        await ctx.answerCallbackQuery({ text: '📡 Starting broadcast...', show_alert: false });
-
-        // Edit the message to show progress
-        await ctx.editMessageText(
-            `📡 <b>BROADCAST IN PROGRESS...</b>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-            `👤 Target: <b>${pending.users}</b> users`,
-            { parse_mode: 'HTML' }
-        );
+        await ctx.answerCallbackQuery({ text: '📡 Dispatching broadcast...' });
+        await ctx.editMessageText(`📡 <b>Broadcast in progress to ${pending.users} users...</b>`, { parse_mode: 'HTML' });
 
         const users = await User.find();
         let successCount = 0;
         let blockedCount = 0;
-        global.broadcastStats = { total: users.length, blocked: 0, failed: 0 };
 
         for (const user of users) {
             try {
@@ -794,7 +487,7 @@ module.exports = (bot) => {
                     await ctx.api.copyMessage(user.userId, pending.msgData.fromChatId, pending.msgData.messageId);
                 }
                 successCount++;
-                await sleep(300);
+                await sleep(150);
             } catch (e) {
                 if (e.message.includes('bot was blocked') || e.message.includes('user is deactivated')) {
                     blockedCount++;
@@ -802,332 +495,89 @@ module.exports = (bot) => {
             }
         }
 
-        global.broadcastStats = { total: users.length, blocked: blockedCount, failed: users.length - successCount - blockedCount };
         delete global.pendingBroadcast[adminId];
-
         await ctx.editMessageText(
-            `✅ <b>BROADCAST COMPLETE</b>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-            `🟢 <b>Success:</b> ${successCount}\n` +
-            `🚫 <b>Blocked:</b> ${blockedCount}\n` +
-            `❌ <b>Failed:</b> ${users.length - successCount - blockedCount}`,
-            { parse_mode: 'HTML' }
+            `✅ <b>Broadcast Complete!</b>\n\n` +
+            `• Sent: <b>${successCount}</b>\n` +
+            `• Blocked: <b>${blockedCount}</b>\n` +
+            `• Failed: <b>${users.length - successCount - blockedCount}</b>`,
+            { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel') }
         );
     });
 
     bot.callbackQuery(/^bc_no_(\d+)$/, async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const adminId = ctx.match[1];
-
-        if (ctx.from.id.toString() !== adminId) {
-            await ctx.answerCallbackQuery({ text: '❌ Not authorized', show_alert: true });
-            return;
-        }
-
-        delete global.pendingBroadcast[adminId];
-        await ctx.answerCallbackQuery({ text: '❌ Broadcast cancelled', show_alert: false });
-        await ctx.editMessageText('❌ <b>BROADCAST CANCELLED</b>', { parse_mode: 'HTML' });
+        delete global.pendingBroadcast[ctx.match[1]];
+        await ctx.answerCallbackQuery({ text: 'Cancelled' });
+        await ctx.editMessageText('❌ Broadcast cancelled.', {
+            reply_markup: new InlineKeyboard().text('⚙️ Admin Console', 'admin_panel')
+        });
     });
 
-    bot.command('settutorial', async (ctx) => {
-        if (!isAdmin(ctx)) return;
+    // Public /help command
+    bot.command('help', async (ctx) => {
+        const keyboard = new InlineKeyboard();
+        const groupLink = process.env.GROUP_LINK;
+        if (groupLink) keyboard.url('👥 Join Search Group »', groupLink).row();
+        keyboard.text('🎬 Browse All Movies', 'user_browse_0');
 
-        let tutorialData = null;
-
-        if (ctx.message.reply_to_message) {
-            if (ctx.message.reply_to_message.video) {
-                tutorialData = { type: 'video', fileId: ctx.message.reply_to_message.video.file_id };
-            } else if (ctx.message.reply_to_message.document) {
-                tutorialData = { type: 'document', fileId: ctx.message.reply_to_message.document.file_id };
-            } else if (ctx.message.reply_to_message.text) {
-                tutorialData = { type: 'link', text: ctx.message.reply_to_message.text };
-            }
-        } else if (ctx.match) {
-            if (ctx.match.toLowerCase() === 'off') {
-                await setSetting('tutorial', null);
-                return ctx.reply('✅ Tutorial video has been DISABLED.');
-            }
-            tutorialData = { type: 'link', text: ctx.match };
-        }
-
-        if (!tutorialData) {
-            return ctx.reply(
-                `❌ <b>Usage:</b>\n` +
-                `1. Reply to a video/message with <code>/settutorial</code>\n` +
-                `2. Or type <code>/settutorial [https://youtube.com/...]</code>\n` +
-                `3. To disable: <code>/settutorial off</code>`, { parse_mode: 'HTML' }
-            );
-        }
-
-        await setSetting('tutorial', JSON.stringify(tutorialData));
-        ctx.reply(`✅ Tutorial successfully set!`);
-    });
-
-    bot.command('maintenance', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const arg = ctx.match.trim().toLowerCase();
-        if (arg === 'on') {
-            global.MAINTENANCE = true;
-            ctx.reply('⚠️ Maintenance Mode ENABLED. Only admins can use the bot.');
-        }
-        else if (arg === 'off') {
-            global.MAINTENANCE = false;
-            ctx.reply('✅ Maintenance Mode DISABLED. Bot is open to public.');
-        }
-        else ctx.reply('Usage: /maintenance on|off');
-    });
-
-    bot.command('logs', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        if (global.LOGS.length === 0) return ctx.reply('✨ No recent errors logged. System is healthy.');
-        ctx.reply(`📜 <b>Recent System Errors</b>\n\n${global.LOGS.join('\n')}`, { parse_mode: 'HTML' });
-    });
-
-    bot.command('restartrooms', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        await Room.updateMany({}, { isBusy: false });
-        ctx.reply('🔄 Admin Override: All rooms have been forcefully marked as FREE in DB.');
-    });
-
-    bot.command('resetstats', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        await Movie.updateMany({}, { requests: 0 });
-        await User.updateMany({}, { searchCount: 0, downloadCount: 0, badges: [] });
-        ctx.reply('✅ All stats have been reset!\n\n• Movie request counts: 0\n• User search counts: 0\n• User download counts: 0\n• All badges: cleared');
-    });
-
-    // --- Monetization Settings ---
-    bot.command('settings', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const mode = await getSetting('mode', 'off');
-        const shortlinkBase = await getSetting('shortlinkBase', 'Not Set');
-        const forceSubChannel = await getSetting('forceSubChannel', 'Not Set');
-        const modeIcon = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 Token' };
-
-        ctx.reply(
-            `⚙️ <b>ADMIN SETTINGS PANEL</b>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
-            `📂 <b>Mode:</b> ${modeIcon[mode] || mode}\n` +
-            `🔗 <b>API URL:</b> <code>${shortlinkBase}</code>\n` +
-            `📢 <b>Force Sub:</b> <code>${forceSubChannel}</code>\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `📝 <b>Control Commands:</b>\n` +
-            `▫️ <code>/setmode off|shortlink|token</code>\n` +
-            `▫️ <code>/setshortlink [url]</code>\n` +
-            `▫️ <code>/setapikey [key]</code>\n` +
-            `▫️ <code>/setforcesub [@channel]</code>\n` +
-            `▫️ <code>/unsetforcesub</code>`,
-            { parse_mode: 'HTML' }
+        await ctx.reply(
+            `📖 <b>HOW TO GET CLIPS:</b>\n\n` +
+            `1️⃣ Type any movie name in our group\n` +
+            `2️⃣ Tap the button sent by the bot\n` +
+            `3️⃣ Download all clips instantly in your private room! 📬\n\n` +
+            `<i>Need help? Contact our admin anytime with /contact.</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
         );
     });
 
-    bot.command('setmode', async (ctx) => {
+    // Command shortcuts
+    bot.command('stats', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const newMode = ctx.match.trim().toLowerCase();
-        if (!['off', 'shortlink', 'token'].includes(newMode)) {
-            return ctx.reply('❌ Invalid mode. Use: /setmode off | shortlink | token');
-        }
-        await setSetting('mode', newMode);
-        const labels = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 Token' };
-        ctx.reply(`✅ Monetization mode changed to: <b>${labels[newMode]}</b>`, { parse_mode: 'HTML' });
+        await renderAdminPanel(ctx, false);
     });
 
-    bot.command('setshortlink', async (ctx) => {
+    bot.command('rooms', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const url = ctx.match.trim();
-        if (!url || !url.startsWith('http')) {
-            return ctx.reply('❌ Usage: /setshortlink https://arolinks.com/api');
-        }
-        // Store in env-like settings
-        process.env.SHORTLINK_BASE_URL = url;
-        await setSetting('shortlinkBase', url);
-        ctx.reply(`✅ Shortlink API URL set to:\n<code>${url}</code>`, { parse_mode: 'HTML' });
-    });
-
-    bot.command('setapikey', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const key = ctx.match.trim();
-        if (!key) return ctx.reply('❌ Usage: /setapikey YOUR_API_KEY_HERE');
-        process.env.SHORTLINK_API_KEY = key;
-        await setSetting('shortlinkApiKey', key);
-        ctx.reply(`✅ Shortlink API Key saved securely.`);
-    });
-
-    bot.command('setforcesub', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        const channel = ctx.match.trim();
-        if (!channel) return ctx.reply('❌ Usage: /setforcesub @yourchannel OR -100channelid');
-        await setSetting('forceSubChannel', channel);
-        ctx.reply(`✅ Force Subscribe set to: <code>${channel}</code>\n\nUsers must join this channel before receiving clips.`, { parse_mode: 'HTML' });
-    });
-
-    bot.command('unsetforcesub', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-        await setSetting('forceSubChannel', null);
-        ctx.reply('✅ Force Subscribe removed. Users can receive clips without joining any channel.');
-    });
-
-    // Handle top movies callback - send user to group to get clips
-    bot.callbackQuery(/^top_(.+)$/, async (ctx) => {
-        const movieTitle = ctx.match[1];
-        try {
-            const movie = await Movie.findOne({ title: movieTitle });
-            if (!movie) {
-                await ctx.answerCallbackQuery({ text: '❌ Movie not found', show_alert: true });
-                return;
-            }
-
-            const groupId = process.env.GROUP_ID;
-            if (!groupId) {
-                await ctx.answerCallbackQuery({ text: '⚠️ Group not configured', show_alert: true });
-                return;
-            }
-
-            await ctx.answerCallbackQuery({ text: '📢 Redirecting to group...', show_alert: false });
-
-            // Send instructions to user
-            await ctx.editMessageText(
-                `🎬 <b>${movie.title}</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `📂 <b>${movie.messageIds.length} clips</b> available!\n\n` +
-                `👇 Go to group and search for clips:\n` +
-                `<a href="https://t.me/${groupId.replace('-100', '')}">Click to Open Group</a>\n\n` +
-                `Then type: <code>${movie.title}</code>`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (error) {
-            console.error('Top callback error:', error);
-        }
-    });
-
-    // Handle stats refresh callback
-    bot.callbackQuery('stats_refresh', async (ctx) => {
-        if (!isAdmin(ctx)) return;
-
-        await ctx.answerCallbackQuery({ text: '🔄 Refreshing...', show_alert: false });
-
-        const totalMovies = await Movie.countDocuments();
-        const totalUsers = await User.countDocuments();
-        const moviesWithClips = await Movie.find({}, { messageIds: 1, files: 1 });
-        const totalClips = moviesWithClips.reduce((sum, m) => sum + (m.files?.length || m.messageIds?.length || 0), 0);
-        const moviesWithThumb = await Movie.countDocuments({ thumbnail: { $ne: null } });
-
-        const now = new Date();
-        const last24h = new Date(now - 24 * 60 * 60 * 1000);
-        const last7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
-        const last30d = new Date(now - 30 * 24 * 60 * 60 * 1000);
-
-        const usersLast24h = await User.countDocuments({ joinedAt: { $gte: last24h } });
-        const usersLast7d = await User.countDocuments({ joinedAt: { $gte: last7d } });
-        const usersLast30d = await User.countDocuments({ joinedAt: { $gte: last30d } });
-
-        const activeUsers = await User.countDocuments({
-            $or: [{ searchCount: { $gt: 0 } }, { downloadCount: { $gt: 0 } }]
-        });
-
-        const allUsers = await User.find({}, { searchCount: 1, downloadCount: 1 });
-        const totalSearches = allUsers.reduce((sum, u) => sum + (u.searchCount || 0), 0);
-        const totalDownloads = allUsers.reduce((sum, u) => sum + (u.downloadCount || 0), 0);
-
-        const topMovies = await Movie.find().sort({ requests: -1 }).limit(10);
-        const topUsers = await User.find().sort({ downloadCount: -1 }).limit(10);
-
         const rooms = await Room.find();
-        const freeRooms = rooms.filter(r => !r.isBusy).length;
-        const busyRooms = rooms.filter(r => r.isBusy).length;
-
-        const todaySearches = global.todayStats?.searches || 0;
-        const todayDeliveries = global.todayStats?.deliveries || 0;
-        const weekSearches = Math.round(todaySearches * 7);
-        const weekDeliveries = Math.round(todayDeliveries * 7);
-
-        const botUptime = process.uptime ? Math.floor(process.uptime() / 60) : 0;
-        const uptimeHours = Math.floor(botUptime / 60);
-
-        const maintenanceMode = process.env.MAINTENANCE_MODE === 'true' || global.maintenanceMode;
-        const mode = await getSetting('monetizationMode') || 'off';
-
-        let statsText = `📊 DASHBOARD\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
-
-        statsText += `📈 OVERVIEW\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `🎬 Movies: ${totalMovies} | 📹 Clips: ${totalClips}\n`;
-        statsText += `👥 Users: ${totalUsers} | ✅ Active: ${activeUsers}\n`;
-        statsText += `🖼️ Thumbnails: ${moviesWithThumb}/${totalMovies}\n\n`;
-
-        statsText += `📅 TODAY\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `🔍 Searches: ${todaySearches}\n`;
-        statsText += `📤 Delivered: ${todayDeliveries}\n`;
-        statsText += `📊 Success: ${todaySearches > 0 ? Math.round((todayDeliveries / todaySearches) * 100) : 0}%\n\n`;
-
-        statsText += `📆 THIS WEEK\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `👥 New Users: ${usersLast7d}\n`;
-        statsText += `🔍 Searches: ~${weekSearches}\n`;
-        statsText += `📤 Delivered: ~${weekDeliveries}\n\n`;
-
-        statsText += `🗓️ THIS MONTH\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `👥 New Users: ${usersLast30d}\n`;
-        statsText += `🔍 Total Searches: ${totalSearches}\n`;
-        statsText += `📤 Total Downloads: ${totalDownloads}\n\n`;
-
-        statsText += `🏠 ROOMS\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `🟢 Free: ${freeRooms} | 🔴 Busy: ${busyRooms}\n`;
-        statsText += `📊 Total: ${rooms.length}\n\n`;
-
-        statsText += `⚙️ SYSTEM\n`;
-        statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `⏱️ Uptime: ${uptimeHours} hours\n`;
-        statsText += `🔧 Mode: ${mode}\n`;
-        statsText += `🔒 Maintenance: ${maintenanceMode ? 'ON ⚠️' : 'OFF ✅'}\n`;
-
-        if (topMovies.length > 0) {
-            statsText += `\n🔥 TOP MOVIES\n`;
-            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-            topMovies.forEach((m, i) => {
-                const clipCount = m.files?.length || m.messageIds?.length || 0;
-                statsText += `${i + 1}. ${m.title} - ${m.requests} searches | ${clipCount} clips\n`;
-            });
-        }
-
-        if (topUsers.length > 0) {
-            statsText += `\n⭐ TOP DOWNLOADERS\n`;
-            statsText += `━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-            topUsers.forEach((u, i) => {
-                statsText += `${i + 1}. User ${u.userId} - ${u.downloadCount} downloads\n`;
-            });
-        }
-
-        statsText += `\n━━━━━━━━━ ✦ ━━━━━━━━━\n`;
-        statsText += `Type /stats for this dashboard\n`;
-
-        const keyboard = new InlineKeyboard().text('🔄 Refresh', 'stats_refresh');
-
-        try {
-            await ctx.editMessageText(statsText, { parse_mode: 'HTML', reply_markup: keyboard });
-        } catch (e) {
-            if (!e.message.includes('message is not modified')) {
-                throw e;
-            }
-        }
+        let text = `🏠 <b>Room Pool Status (${rooms.length} Total):</b>\n\n`;
+        rooms.forEach((r, i) => text += `${i + 1}. <code>${r.roomId}</code> • ${r.isBusy ? '🔴 Busy' : '🟢 Free'}\n`);
+        ctx.reply(text, {
+            parse_mode: 'HTML',
+            reply_markup: new InlineKeyboard().text('🧹 Clean All Rooms', 'admin_clean_all_rooms')
+        });
     });
 
-    // Emergency Unlock Command
+    bot.command('cleanroom', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const roomId = ctx.match.trim();
+        const room = await Room.findOne({ roomId });
+        if (!room) return ctx.reply('❌ Room not found.');
+
+        if (room.currentUserId) await safeKickRoomUser(ctx.api, roomId, room.currentUserId);
+        if (room.lastMessageIds?.length > 0) await safeDeleteRoomMessages(ctx.api, roomId, room.lastMessageIds);
+
+        room.isBusy = false;
+        room.currentUserId = null;
+        room.lastMessageIds = [];
+        await room.save();
+        ctx.reply(`✅ Room <code>${roomId}</code> cleaned and marked FREE.`, { parse_mode: 'HTML' });
+    });
+
+    bot.command('addroom', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const roomId = ctx.match.trim();
+        if (!roomId) return ctx.reply('Usage: /addroom -100XXXXXXXXXX');
+        await Room.findOneAndUpdate({ roomId }, { isBusy: false, lastUsed: new Date() }, { upsert: true });
+        ctx.reply(`✅ Room <code>${roomId}</code> added to pool!`, { parse_mode: 'HTML' });
+    });
+
     bot.command('unlock', async (ctx) => {
         if (!isAdmin(ctx)) return;
-        const targetId = ctx.match;
-        if (!targetId) return ctx.reply('❌ Usage: `/unlock {userId}`');
-
-        try {
-            await User.findOneAndUpdate({ userId: Number(targetId) }, { isDelivering: false });
-            ctx.reply(`✅ Lock cleared for user \`${targetId}\`.`);
-        } catch (e) {
-            ctx.reply(`❌ Error: ${e.message}`);
-        }
+        const targetId = ctx.match.trim();
+        if (!targetId) return ctx.reply('Usage: /unlock USER_ID');
+        await User.findOneAndUpdate({ userId: Number(targetId) }, { isDelivering: false });
+        ctx.reply(`✅ Lock cleared for user <code>${targetId}</code>.`, { parse_mode: 'HTML' });
     });
 
     // Users management - clean blocked users and export JSON
