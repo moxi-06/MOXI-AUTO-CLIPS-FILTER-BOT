@@ -10,7 +10,6 @@ const {
     extractMovieDetails
 } = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
-const { scheduleAutoDelete, ONE_HOUR_MS } = require('../utils/autoDeleteManager');
 const { InlineKeyboard } = require('grammy');
 
 function getUserNameForLog(user) {
@@ -26,15 +25,25 @@ function extractRatio(title) {
     return match ? match[1] : '16:9';
 }
 
-// Auto-delete a bot message after N milliseconds (Default: 1 Hour)
-const autoDelete = async (api, chatId, messageId, ms = ONE_HOUR_MS) => {
-    scheduleAutoDelete(api, chatId, messageId, ms);
+// Auto-delete a bot message after N milliseconds (Default: 10 minutes like previous version)
+const autoDelete = (api, chatId, messageId, ms = 10 * 60 * 1000) => {
+    if (!api || !chatId || !messageId) return;
+    setTimeout(async () => {
+        try {
+            await api.deleteMessage(chatId, messageId);
+        } catch (_) { }
+    }, ms);
 };
 
 // Delete command message that triggered the bot
-const deleteTriggerMessage = async (ctx, ms = ONE_HOUR_MS) => {
-    if (ctx.message?.message_id) {
-        scheduleAutoDelete(ctx.api, ctx.chat.id, ctx.message.message_id, ms);
+const deleteTriggerMessage = (ctx, ms = 0) => {
+    if (!ctx || !ctx.chat || !ctx.message) return;
+    if (ms === 0) {
+        ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id).catch(() => {});
+    } else {
+        setTimeout(async () => {
+            try { await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id); } catch (_) { }
+        }, ms);
     }
 };
 
@@ -388,17 +397,17 @@ module.exports = (bot) => {
             const captionOpts = { caption: '💡 <b>How to verify link:</b>', parse_mode: 'HTML', reply_markup: keyboard };
             if (tutData.type === 'video') {
                 const sent = await ctx.replyWithVideo(tutData.fileId, captionOpts);
-                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, 10 * 60 * 1000);
             } else if (tutData.type === 'document') {
                 const sent = await ctx.replyWithDocument(tutData.fileId, captionOpts);
-                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, 10 * 60 * 1000);
             } else if (tutData.type === 'link') {
                 const sent = await ctx.reply(`💡 <b>How to verify link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, {
                     parse_mode: 'HTML',
                     disable_web_page_preview: true,
                     reply_markup: keyboard
                 });
-                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, 10 * 60 * 1000);
             }
         } catch (e) {
             console.error('Tutorial send error:', e.message);
@@ -782,69 +791,130 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             name: `Moxi: ${movie.title.substring(0, 20)}`
         });
 
-        // ── 5. Upload/Copy Clips to Room in Media Albums ──────────────
+        // ── 5. Upload/Copy Clips to Room in Batches of 10 ──────────────
         let newMessageIds = [];
-        const files = movie.files && movie.files.length > 0 ? movie.files : null;
+        const dbChannel = process.env.DB_CHANNEL_ID;
 
-        if (files) {
-            const visualItems = files.filter(f => ['photo', 'video', 'animation'].includes(f.fileType));
-            const otherItems = files.filter(f => !['photo', 'video', 'animation'].includes(f.fileType));
-
-            // Visual media groups (batches of 10)
-            for (let i = 0; i < visualItems.length; i += 10) {
-                const chunk = visualItems.slice(i, i + 10);
-                const mediaGroup = chunk.map((f, idx) => ({
-                    type: f.fileType === 'animation' ? 'video' : f.fileType,
-                    media: f.fileId,
-                    caption: (idx === 0 && f.caption) ? f.caption : undefined
-                }));
-
-                try {
-                    const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
-                    if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
-                    await sleep(1000);
-                } catch (e) {
-                    for (const f of chunk) {
-                        try {
-                            let m;
-                            if (f.fileType === 'video') m = await ctx.api.sendVideo(room.roomId, f.fileId, { caption: f.caption || undefined });
-                            else if (f.fileType === 'photo') m = await ctx.api.sendPhoto(room.roomId, f.fileId, { caption: f.caption || undefined });
-                            else m = await ctx.api.sendAnimation(room.roomId, f.fileId, { caption: f.caption || undefined });
-                            if (m) newMessageIds.push(m.message_id);
-                            await sleep(350);
-                        } catch (_) { }
-                    }
-                }
-            }
-
-            // Document & Audio items
-            for (const f of otherItems) {
-                try {
-                    let m;
-                    if (f.fileType === 'document') m = await ctx.api.sendDocument(room.roomId, f.fileId, { caption: f.caption || undefined });
-                    else if (f.fileType === 'audio') m = await ctx.api.sendAudio(room.roomId, f.fileId, { caption: f.caption || undefined });
-                    if (m) newMessageIds.push(m.message_id);
-                    await sleep(350);
-                } catch (_) { }
-            }
-        } else {
-            // Legacy path: copy by messageIds
-            const dbChannel = process.env.DB_CHANNEL_ID;
+        // Priority 1: Direct Batch Copy from DB Channel (Fastest, 10 clips per call)
+        if (dbChannel && movie.messageIds && movie.messageIds.length > 0) {
             for (let i = 0; i < movie.messageIds.length; i += 10) {
                 const chunk = movie.messageIds.slice(i, i + 10);
                 try {
                     const copied = await ctx.api.copyMessages(room.roomId, dbChannel, chunk);
-                    if (Array.isArray(copied)) newMessageIds.push(...copied.map(c => c.message_id));
-                    await sleep(1000);
-                } catch (e) {
+                    if (Array.isArray(copied)) {
+                        newMessageIds.push(...copied.map(c => c.message_id));
+                    }
+                    await sleep(800);
+                } catch (batchErr) {
+                    console.warn(`[Batch copyMessages failed for chunk ${i}-${i + chunk.length}]:`, batchErr.message);
+                    // Fallback for this chunk if a message was removed from channel
                     for (const msgId of chunk) {
                         try {
                             const c = await ctx.api.copyMessage(room.roomId, dbChannel, msgId);
-                            newMessageIds.push(c.message_id);
-                            await sleep(350);
+                            if (c) newMessageIds.push(c.message_id);
+                            await sleep(250);
                         } catch (_) { }
                     }
                 }
+            }
+        } else if (movie.files && movie.files.length > 0) {
+            // Priority 2: Media Albums by Type in Batches of 10
+            const files = movie.files;
+
+            // Visual media items (photos & videos) in albums of 10
+            const visualItems = files.filter(f => ['photo', 'video'].includes(f.fileType));
+            for (let i = 0; i < visualItems.length; i += 10) {
+                const chunk = visualItems.slice(i, i + 10);
+                if (chunk.length > 1) {
+                    const mediaGroup = chunk.map((f, idx) => ({
+                        type: f.fileType,
+                        media: f.fileId,
+                        caption: (idx === 0 && f.caption) ? f.caption : undefined
+                    }));
+                    try {
+                        const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
+                        if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
+                        await sleep(1000);
+                        continue;
+                    } catch (e) {
+                        console.error('sendMediaGroup visual batch failed:', e.message);
+                    }
+                }
+                for (const f of chunk) {
+                    try {
+                        let m;
+                        if (f.fileType === 'video') m = await ctx.api.sendVideo(room.roomId, f.fileId, { caption: f.caption || undefined });
+                        else if (f.fileType === 'photo') m = await ctx.api.sendPhoto(room.roomId, f.fileId, { caption: f.caption || undefined });
+                        if (m) newMessageIds.push(m.message_id);
+                        await sleep(250);
+                    } catch (_) { }
+                }
+            }
+
+            // Document items (raw video clips, edit files, zip in document albums of 10)
+            const docItems = files.filter(f => f.fileType === 'document');
+            for (let i = 0; i < docItems.length; i += 10) {
+                const chunk = docItems.slice(i, i + 10);
+                if (chunk.length > 1) {
+                    const mediaGroup = chunk.map((f, idx) => ({
+                        type: 'document',
+                        media: f.fileId,
+                        caption: (idx === 0 && f.caption) ? f.caption : undefined
+                    }));
+                    try {
+                        const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
+                        if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
+                        await sleep(1000);
+                        continue;
+                    } catch (e) {
+                        console.error('sendMediaGroup document batch failed:', e.message);
+                    }
+                }
+                for (const f of chunk) {
+                    try {
+                        const m = await ctx.api.sendDocument(room.roomId, f.fileId, { caption: f.caption || undefined });
+                        if (m) newMessageIds.push(m.message_id);
+                        await sleep(250);
+                    } catch (_) { }
+                }
+            }
+
+            // Audio items in audio albums of 10
+            const audioItems = files.filter(f => f.fileType === 'audio');
+            for (let i = 0; i < audioItems.length; i += 10) {
+                const chunk = audioItems.slice(i, i + 10);
+                if (chunk.length > 1) {
+                    const mediaGroup = chunk.map((f, idx) => ({
+                        type: 'audio',
+                        media: f.fileId,
+                        caption: (idx === 0 && f.caption) ? f.caption : undefined
+                    }));
+                    try {
+                        const sent = await ctx.api.sendMediaGroup(room.roomId, mediaGroup);
+                        if (Array.isArray(sent)) newMessageIds.push(...sent.map(m => m.message_id));
+                        await sleep(1000);
+                        continue;
+                    } catch (e) {
+                        console.error('sendMediaGroup audio batch failed:', e.message);
+                    }
+                }
+                for (const f of chunk) {
+                    try {
+                        const m = await ctx.api.sendAudio(room.roomId, f.fileId, { caption: f.caption || undefined });
+                        if (m) newMessageIds.push(m.message_id);
+                        await sleep(250);
+                    } catch (_) { }
+                }
+            }
+
+            // Standalone animation items
+            const animItems = files.filter(f => f.fileType === 'animation');
+            for (const f of animItems) {
+                try {
+                    const m = await ctx.api.sendAnimation(room.roomId, f.fileId, { caption: f.caption || undefined });
+                    if (m) newMessageIds.push(m.message_id);
+                    await sleep(250);
+                } catch (_) { }
             }
         }
 
@@ -920,7 +990,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             `<i>Single-use download room is open for <b>30 minutes</b>:</i>`;
 
         const sentCard = await deleteOldAndSendNew(ctx, waitMsgId, cardText, { reply_markup: keyboard });
-        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, ONE_HOUR_MS);
+        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, 30 * 60 * 1000);
 
         // Stats tracking
         global.todayStats.deliveries++;

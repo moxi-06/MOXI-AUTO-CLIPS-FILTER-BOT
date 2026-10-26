@@ -13,7 +13,6 @@ const chatGuardHandler = require('./src/handlers/chatGuardHandler');
 const searchHandler = require('./src/handlers/searchHandler');
 const deliveryHandler = require('./src/handlers/deliveryHandler');
 const { safeDeleteRoomMessages, safeKickRoomUser } = require('./src/utils/helpers');
-const { initAutoDeleteManager } = require('./src/utils/autoDeleteManager');
 
 // Global stats for live tracking
 global.todayStats = {
@@ -100,9 +99,6 @@ async function bootstrap() {
         maxRetryAttempts: 5,
         maxDelaySeconds: 120
     }));
-
-    // Initialize 1-Hour Auto-Delete Manager for all messages sent to users
-    initAutoDeleteManager(bot);
 
     // 3. Register route handlers
     chatGuardHandler(bot);   // Handles group protection, anti-spam, and welcome
