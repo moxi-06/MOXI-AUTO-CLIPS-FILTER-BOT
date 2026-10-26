@@ -204,15 +204,15 @@ async function bootstrap() {
     }
     cleanupAllRoomsOnStartup();
 
-    // --- Automatic Background Room Sanitization Watchdog (Runs Every 30 Minutes) ---
-    // Guarantees no room ever stays dirty or stuck with leftover files!
-    setInterval(async () => {
+    // --- Reusable Room Sanitization & Cleanup Function ---
+    async function cleanupFreeRooms() {
         try {
-            // Check for rooms idle past the 30-minute grace period (+5 min buffer)
+            // Check for rooms idle past the 30-minute grace period (+5 min buffer) or marked free with leftover messages
             const thirtyFiveMinsAgo = new Date(Date.now() - 35 * 60 * 1000);
             const expiredRooms = await Room.find({
                 $or: [
                     { isBusy: true, lastUsed: { $lte: thirtyFiveMinsAgo } },
+                    { isBusy: false, lastMessageIds: { $exists: true, $not: { $size: 0 } } },
                     { lastMessageIds: { $exists: true, $not: { $size: 0 } }, lastUsed: { $lte: thirtyFiveMinsAgo } }
                 ]
             });
@@ -228,12 +228,16 @@ async function bootstrap() {
                 room.currentUserId = null;
                 room.lastMessageIds = [];
                 await room.save();
-                console.log(`🧹 Watchdog sanitized and freed idle room ${room.roomId}`);
+                console.log(`🧹 Sanitized and reset room ${room.roomId}`);
             }
         } catch (error) {
-            console.error('❌ Room Watchdog Error:', error.message);
+            console.error('❌ Room Cleanup Error:', error.message);
         }
-    }, 30 * 60 * 1000); // Check every 30 minutes
+    }
+
+    // --- Automatic Background Room Sanitization Watchdog (Runs Every 30 Minutes) ---
+    // Guarantees no room ever stays dirty or stuck with leftover files!
+    setInterval(cleanupFreeRooms, 30 * 60 * 1000); // Check every 30 minutes
 
     // --- Group Auto-Promoter (Every 5 hours) with rate limiting ---
     const GROUP_ID = process.env.GROUP_ID;

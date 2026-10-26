@@ -1,4 +1,5 @@
 const { sendToLogChannel } = require('../utils/helpers');
+const { InlineKeyboard } = require('grammy');
 
 function getUserNameForLog(user) {
     if (user.username) return `@${user.username}`;
@@ -6,7 +7,20 @@ function getUserNameForLog(user) {
     return `User ${user.id}`;
 }
 
+const getWelcomeKeyboard = () => new InlineKeyboard()
+    .text('📖 Step-by-Step Guide', 'welcome_guide')
+    .text('🎬 See All Movies', 'welcome_movies').row()
+    .text('❓ Help', 'welcome_help');
+
 module.exports = (bot) => {
+    // Universal Close Message Handler (Instantly deletes message on tap)
+    bot.callbackQuery(['close_msg', 'delete_msg', 'close'], async (ctx) => {
+        try {
+            await ctx.answerCallbackQuery();
+            await ctx.deleteMessage();
+        } catch (_) { }
+    });
+
     const sendWelcome = async (ctx, user) => {
         if (!user || (ctx.me && user.id === ctx.me.id)) return;
 
@@ -14,10 +28,7 @@ module.exports = (bot) => {
         await sendToLogChannel(bot, `👥 <b>New Group Member</b>\n\n👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n📅 Joined: ${new Date().toLocaleString()}\n\n#newmember 👋`);
 
         try {
-            const welcomeKeyboard = new (require('grammy')).InlineKeyboard()
-                .text('📖 Step-by-Step Guide', 'welcome_guide')
-                .text('🎬 See All Movies', 'welcome_movies').row()
-                .text('❓ Help', 'welcome_help');
+            const welcomeKeyboard = getWelcomeKeyboard();
 
             await ctx.reply(
                 `👋 <b>WELCOME TO THE GROUP!</b>\n\n` +
@@ -68,6 +79,9 @@ module.exports = (bot) => {
     // Handle welcome button clicks
     bot.callbackQuery('welcome_guide', async (ctx) => {
         await ctx.answerCallbackQuery();
+        const navKeyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'welcome_home');
+
         await ctx.editMessageText(
             `📖 <b>STEP-BY-STEP GUIDE</b>\n\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
@@ -88,11 +102,15 @@ module.exports = (bot) => {
             `• Use /filters to see all movies\n` +
             `• If not found, I'll suggest similar ones\n\n` +
             `❓ Need help? Type /help anytime!`,
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', reply_markup: navKeyboard }
         );
     });
+
     bot.callbackQuery('welcome_help', async (ctx) => {
         await ctx.answerCallbackQuery();
+        const navKeyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'welcome_home');
+
         await ctx.editMessageText(
             `❓ <b>HELP & FAQ</b>\n\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
@@ -113,12 +131,15 @@ module.exports = (bot) => {
             `A: Don't worry! I fix typos automatically.\n\n` +
             `Q: Need help?\n` +
             `A: Contact admin anytime!`,
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', reply_markup: navKeyboard }
         );
     });
 
     bot.callbackQuery('welcome_movies', async (ctx) => {
         await ctx.answerCallbackQuery();
+        const navKeyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'welcome_home');
+
         await ctx.editMessageText(
             `🎬 <b>ALL MOVIES LIST</b>\n\n` +
             `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
@@ -128,7 +149,25 @@ module.exports = (bot) => {
             `• Or just type a movie name\n` +
             `• I fix your typos! ✨\n\n` +
             `🎯 <b>Happy searching!</b> 👆`,
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', reply_markup: navKeyboard }
+        );
+    });
+
+    bot.callbackQuery('welcome_home', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        await ctx.editMessageText(
+            `👋 <b>WELCOME TO THE GROUP!</b>\n\n` +
+            `🎬 <b>Movie Clips Assistant</b> at your service!\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `🚀 <b>QUICK START:</b>\n` +
+            `1️⃣ Type any Movie Name here\n` +
+            `2️⃣ Tap the button I reply with\n` +
+            `3️⃣ Click the link in your PM\n` +
+            `4️⃣ All clips delivered instantly! 📬\n\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `💡 <b>Example:</b> <code>Leo</code> • <code>Jawan</code>\n\n` +
+            `🎯 <b>Try it now!</b> Type a movie name below 👇`,
+            { parse_mode: 'HTML', reply_markup: getWelcomeKeyboard() }
         );
     });
 

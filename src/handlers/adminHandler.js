@@ -1,6 +1,6 @@
 const { Movie, Room, User, Token, BotSettings } = require('../database');
 const { cleanMovieName, sleep, sendToLogChannel, safeDeleteRoomMessages, safeKickRoomUser } = require('../utils/helpers');
-const { getSetting, setSetting } = require('../utils/monetization');
+const { getSetting, setSetting, wrapShortlink } = require('../utils/monetization');
 const { InlineKeyboard } = require('grammy');
 
 global.MAINTENANCE = false;
@@ -100,10 +100,12 @@ async function removeSingleClip(movieQuery, clipIdentifier, ctxApi = null) {
 // Helper to build the main Admin Control Console
 async function renderAdminPanel(ctx, isEdit = false) {
     const mode = await getSetting('mode', 'off');
-    const modeLabels = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 24h Pass' };
+    const modeLabels = { off: '🟢 Free', shortlink: '🔗 Shortlink', token: '🎫 Token Pass' };
     const forceSubChannel = await getSetting('forceSubChannel', null);
     const tutStr = await getSetting('tutorial', null);
     const promoStr = await getSetting('roomPromo', null);
+    const apiKey = await getSetting('shortlinkApiKey', process.env.SHORTLINK_API_KEY || '');
+    const baseUrl = await getSetting('shortlinkBaseUrl', process.env.SHORTLINK_BASE_URL || '');
 
     let tutorialDisplay = 'None ❌';
     if (tutStr) {
@@ -128,6 +130,7 @@ async function renderAdminPanel(ctx, isEdit = false) {
 
     const text = `⚙️ <b>ADMIN CONTROL CONSOLE</b>\n` +
         `• <b>Mode:</b> ${modeLabels[mode] || mode}\n` +
+        `• <b>Shortlink API:</b> <code>${apiKey && baseUrl ? 'Configured ✅' : 'Not set ❌'}</code>\n` +
         `• <b>Force Sub:</b> <code>${forceSubChannel || 'Disabled'}</code>\n` +
         `• <b>Tutorial Video:</b> <code>${tutorialDisplay}</code>\n` +
         `• <b>Room Promo:</b> <code>${promoDisplay}</code>\n` +
@@ -136,16 +139,17 @@ async function renderAdminPanel(ctx, isEdit = false) {
         `<i>Tap any module below to configure:</i>`;
 
     const keyboard = new InlineKeyboard()
-        .text('⚙️ Mode Switcher', 'admin_mode_menu')
-        .text('🎥 Tutorial Video', 'admin_tut_menu').row()
-        .text('📢 Room Promo', 'admin_promo_menu')
-        .text('🗑️ Remove Clip', 'admin_delclip_menu').row()
-        .text('📢 Force Sub', 'admin_forcesub_menu')
-        .text('🏠 Room Manager', 'admin_rooms_menu').row()
-        .text('📊 Live Analytics', 'admin_stats_view')
-        .text('📡 Broadcast', 'admin_bc_prompt').row()
+        .text('🟣 Mode & Shortlinks', 'admin_mode_menu')
+        .text('🟣 Tutorial Video', 'admin_tut_menu').row()
+        .text('🟣 Room Promo', 'admin_promo_menu')
+        .text('🔴 Remove Clip', 'admin_delclip_menu').row()
+        .text('🟣 Force Sub', 'admin_forcesub_menu')
+        .text('🟣 Room Manager', 'admin_rooms_menu').row()
+        .text('🟣 Live Analytics', 'admin_stats_view')
+        .text('🟣 Broadcast', 'admin_bc_prompt').row()
         .text(`🔒 Maintenance: ${maintenance ? 'ON' : 'OFF'}`, 'admin_maint_toggle')
-        .text('🔄 Refresh Panel', 'admin_panel');
+        .text('🔄 Refresh Panel', 'admin_panel').row()
+        .text('❌ Close', 'close_msg');
 
     if (isEdit) {
         try {
@@ -292,6 +296,41 @@ module.exports = (bot) => {
             }
         }
 
+        // 4.5. Awaiting Shortlink API Key
+        if (state && state.action === 'awaiting_apikey') {
+            const input = ctx.message.text?.trim();
+            if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
+                delete global.adminState[ctx.from.id];
+                return ctx.reply('❌ API key update cancelled.', {
+                    reply_markup: new InlineKeyboard().text('⚙️ Monetization Menu', 'admin_mode_menu')
+                });
+            }
+            delete global.adminState[ctx.from.id];
+            await setSetting('shortlinkApiKey', input);
+            return ctx.reply(`✅ <b>Shortlink API Key Saved!</b>\n\nKey: <code>${input.substring(0, 4)}••••${input.slice(-4)}</code>`, {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('⚙️ Monetization Menu', 'admin_mode_menu').text('⚙️ Console', 'admin_panel')
+            });
+        }
+
+        // 4.6. Awaiting Shortlink Base URL / Endpoint
+        if (state && state.action === 'awaiting_endpoint') {
+            let input = ctx.message.text?.trim();
+            if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
+                delete global.adminState[ctx.from.id];
+                return ctx.reply('❌ Endpoint update cancelled.', {
+                    reply_markup: new InlineKeyboard().text('⚙️ Monetization Menu', 'admin_mode_menu')
+                });
+            }
+            delete global.adminState[ctx.from.id];
+            if (!input.startsWith('http')) input = `https://${input}`;
+            await setSetting('shortlinkBaseUrl', input);
+            return ctx.reply(`✅ <b>Shortlink Base URL / Endpoint Saved!</b>\n\nEndpoint: <code>${input}</code>`, {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('⚙️ Monetization Menu', 'admin_mode_menu').text('⚙️ Console', 'admin_panel')
+            });
+        }
+
         // 5. Awaiting Manual Delete Clip Input
         if (state && state.action === 'awaiting_delclip') {
             const input = ctx.message.text?.trim();
@@ -387,25 +426,48 @@ module.exports = (bot) => {
         await renderAdminPanel(ctx, true);
     });
 
-    // ── Mode Switcher Menu ──────────────────────────────────────────
+    // Helper to render the complete Monetization & Shortlink / Token Settings Menu
+    async function renderModeSettingsMenu(ctx, isEdit = true) {
+        const currentMode = await getSetting('mode', 'off');
+        const apiKey = await getSetting('shortlinkApiKey', process.env.SHORTLINK_API_KEY || '');
+        const baseUrl = await getSetting('shortlinkBaseUrl', process.env.SHORTLINK_BASE_URL || '');
+        const tokenHours = await getSetting('tokenDurationHours', 24);
+
+        const maskedKey = apiKey ? `${apiKey.substring(0, 4)}••••${apiKey.slice(-4)}` : '❌ Not configured';
+        const endpointDisplay = baseUrl ? baseUrl : '❌ Not configured';
+
+        const keyboard = new InlineKeyboard()
+            .text(`${currentMode === 'off' ? '🟢 Free (Active)' : 'Free Mode'}`, 'setmode_off').row()
+            .text(`${currentMode === 'shortlink' ? '🔗 Shortlink (Active)' : 'Shortlink Mode'}`, 'setmode_shortlink')
+            .text(`${currentMode === 'token' ? '🎫 Token Pass (Active)' : 'Token Pass Mode'}`, 'setmode_token').row()
+            .text('🔑 Set API Key', 'admin_set_apikey')
+            .text('🌐 Set Endpoint', 'admin_set_endpoint').row()
+            .text(`⏱️ Pass: ${tokenHours}h`, 'admin_set_token_dur')
+            .text('🧪 Test Link', 'admin_test_shortlink').row()
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
+
+        const text = `⚙️ <b>MONETIZATION & SHORTLINK SETTINGS</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `• <b>Current Mode:</b> <code>${currentMode.toUpperCase()}</code>\n` +
+            `• <b>Shortlink API Key:</b> <code>${maskedKey}</code>\n` +
+            `• <b>Shortlink Endpoint:</b> <code>${endpointDisplay}</code>\n` +
+            `• <b>Token Pass Duration:</b> <code>${tokenHours} Hours</code>\n\n` +
+            `<i>Tap any option below to change mode, configure API keys, or test:</i>`;
+
+        if (isEdit) {
+            try {
+                return await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+            } catch (_) { }
+        }
+        return await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    }
+
+    // ── Mode Switcher & Shortlink Settings Menu ─────────────────────
     bot.callbackQuery('admin_mode_menu', async (ctx) => {
         if (!isAdmin(ctx)) return;
         await ctx.answerCallbackQuery();
-        const current = await getSetting('mode', 'off');
-
-        const keyboard = new InlineKeyboard()
-            .text(`${current === 'off' ? '🟢 Free (Active)' : 'Free Mode'}`, 'setmode_off').row()
-            .text(`${current === 'shortlink' ? '🔗 Shortlink (Active)' : 'Shortlink Mode'}`, 'setmode_shortlink').row()
-            .text(`${current === 'token' ? '🎫 24h Pass (Active)' : '24h Token Pass Mode'}`, 'setmode_token').row()
-            .text('🔙 Back to Console', 'admin_panel');
-
-        await ctx.editMessageText(
-            `⚙️ <b>Select Monetization Mode:</b>\n\n` +
-            `• <b>Free:</b> Instant rooms with no ads.\n` +
-            `• <b>Shortlink:</b> Shortens direct verify link per request.\n` +
-            `• <b>24h Token Pass:</b> Users solve 1 link for 24h access.`,
-            { parse_mode: 'HTML', reply_markup: keyboard }
-        );
+        await renderModeSettingsMenu(ctx, true);
     });
 
     bot.callbackQuery(/^setmode_(off|shortlink|token)$/, async (ctx) => {
@@ -413,7 +475,148 @@ module.exports = (bot) => {
         const newMode = ctx.match[1];
         await setSetting('mode', newMode);
         await ctx.answerCallbackQuery({ text: `✅ Switched to ${newMode.toUpperCase()}!` });
-        await renderAdminPanel(ctx, true);
+        await renderModeSettingsMenu(ctx, true);
+    });
+
+    // Set API Key Prompt
+    bot.callbackQuery('admin_set_apikey', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_apikey' };
+
+        const keyboard = new InlineKeyboard().text('🔴 Cancel', 'admin_cancel_input');
+
+        await ctx.editMessageText(
+            `🔑 <b>Set Shortlink API Key:</b>\n\n` +
+            `Send your API token from your shortener provider (AroLinks, GPLinks, VPLinks, etc.) as a text message here:\n\n` +
+            `<i>Example: <code>d9a4f78b12e3456789...</code></i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Set Endpoint Menu
+    bot.callbackQuery('admin_set_endpoint', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+
+        const keyboard = new InlineKeyboard()
+            .text('🔗 AroLinks (arolinks.com/api)', 'preset_endpoint_arolinks').row()
+            .text('🔗 GPLinks (gplinks.com/api)', 'preset_endpoint_gplinks').row()
+            .text('🔗 VPLinks (vplinks.in/api)', 'preset_endpoint_vplinks').row()
+            .text('✏️ Enter Custom URL', 'admin_custom_endpoint_prompt').row()
+            .text('🔙 « Back', 'admin_mode_menu')
+            .text('❌ Close', 'close_msg');
+
+        await ctx.editMessageText(
+            `🌐 <b>Set Shortlink API Base URL / Endpoint:</b>\n\n` +
+            `Tap a 1-click preset below or enter a custom endpoint:`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Endpoint 1-click presets
+    bot.callbackQuery(/^preset_endpoint_(.+)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const preset = ctx.match[1];
+        let url = '';
+        if (preset === 'arolinks') url = 'https://arolinks.com/api';
+        else if (preset === 'gplinks') url = 'https://gplinks.com/api';
+        else if (preset === 'vplinks') url = 'https://vplinks.in/api';
+
+        if (url) {
+            await setSetting('shortlinkBaseUrl', url);
+            await ctx.answerCallbackQuery({ text: `✅ Endpoint set to ${url}!` });
+        }
+        await renderModeSettingsMenu(ctx, true);
+    });
+
+    // Custom Endpoint Prompt
+    bot.callbackQuery('admin_custom_endpoint_prompt', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_endpoint' };
+
+        const keyboard = new InlineKeyboard().text('🔴 Cancel', 'admin_cancel_input');
+        await ctx.editMessageText(
+            `🌐 <b>Enter Custom Shortlink API URL:</b>\n\n` +
+            `Send the full endpoint URL as a text message here.\n` +
+            `<i>Ensure it ends in <code>/api</code> (e.g. <code>https://myshortener.com/api</code>)</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Set Token Duration Menu
+    bot.callbackQuery('admin_set_token_dur', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+
+        const currentHours = await getSetting('tokenDurationHours', 24);
+        const keyboard = new InlineKeyboard()
+            .text(`${currentHours === 6 ? '✅ 6 Hours' : '6 Hours'}`, 'token_dur_6')
+            .text(`${currentHours === 12 ? '✅ 12 Hours' : '12 Hours'}`, 'token_dur_12').row()
+            .text(`${currentHours === 24 ? '✅ 24 Hours (Standard)' : '24 Hours'}`, 'token_dur_24').row()
+            .text(`${currentHours === 48 ? '✅ 48 Hours' : '48 Hours'}`, 'token_dur_48')
+            .text(`${currentHours === 72 ? '✅ 72 Hours' : '72 Hours'}`, 'token_dur_72').row()
+            .text('🔙 « Back', 'admin_mode_menu')
+            .text('❌ Close', 'close_msg');
+
+        await ctx.editMessageText(
+            `⏱️ <b>Set Token Pass Duration:</b>\n\n` +
+            `How long should 1 completed shortlink unlock clips for the user?\n` +
+            `<b>Current Duration:</b> <code>${currentHours} Hours</code>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    });
+
+    // Token Duration Selection
+    bot.callbackQuery(/^token_dur_(\d+)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const hours = parseInt(ctx.match[1], 10);
+        await setSetting('tokenDurationHours', hours);
+        await ctx.answerCallbackQuery({ text: `✅ Pass duration set to ${hours} hours!` });
+        await renderModeSettingsMenu(ctx, true);
+    });
+
+    // Test Shortlink
+    bot.callbackQuery('admin_test_shortlink', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery({ text: '🧪 Testing shortlink...' });
+        const testTarget = 'https://t.me/telegram';
+        const apiKey = await getSetting('shortlinkApiKey', process.env.SHORTLINK_API_KEY || '');
+        const baseUrl = await getSetting('shortlinkBaseUrl', process.env.SHORTLINK_BASE_URL || '');
+
+        if (!apiKey || !baseUrl) {
+            return ctx.reply(
+                `❌ <b>Shortlink Not Configured:</b>\n` +
+                `Please set both Shortlink API Key and Endpoint URL first!`,
+                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('⚙️ Settings', 'admin_mode_menu').text('❌ Close', 'close_msg') }
+            );
+        }
+
+        const res = await wrapShortlink(testTarget);
+        if (res && res !== testTarget && res.startsWith('http')) {
+            await ctx.reply(
+                `✅ <b>Shortlink API Working Perfectly!</b>\n\n` +
+                `🔗 <b>Generated Link:</b>\n<code>${res}</code>\n\n` +
+                `• <b>Endpoint:</b> <code>${baseUrl}</code>`,
+                {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true,
+                    reply_markup: new InlineKeyboard().text('⚙️ Settings', 'admin_mode_menu').text('❌ Close', 'close_msg')
+                }
+            );
+        } else {
+            await ctx.reply(
+                `❌ <b>Shortlink API Test Failed!</b>\n\n` +
+                `The provider did not return a valid shortened link.\n` +
+                `• Check that your API key is correct.\n` +
+                `• Check that your endpoint ends in <code>/api</code> (e.g. <code>https://arolinks.com/api</code>).`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('⚙️ Settings', 'admin_mode_menu').text('❌ Close', 'close_msg')
+                }
+            );
+        }
     });
 
     // ── Tutorial Video Menu ─────────────────────────────────────────
@@ -432,8 +635,9 @@ module.exports = (bot) => {
 
         const keyboard = new InlineKeyboard()
             .text('✏️ Change Video / Link', 'admin_tut_change').row()
-            .text('❌ Disable Tutorial', 'admin_tut_off').row()
-            .text('🔙 Back to Console', 'admin_panel');
+            .text('🔴 Disable Tutorial', 'admin_tut_off').row()
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
 
         await ctx.editMessageText(
             `🎥 <b>Tutorial Video Manager</b>\n\n` +
@@ -483,8 +687,9 @@ module.exports = (bot) => {
 
         const keyboard = new InlineKeyboard()
             .text('📹 Set / Change Promo Message', 'admin_set_promo').row()
-            .text('❌ Turn Off Room Promo', 'admin_promo_off').row()
-            .text('🔙 Back to Console', 'admin_panel');
+            .text('🔴 Turn Off Room Promo', 'admin_promo_off').row()
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
 
         await ctx.editMessageText(
             `📢 <b>ROOM PROMOTIONAL SIGNOFF MESSAGE</b>\n\n` +
@@ -525,7 +730,8 @@ module.exports = (bot) => {
 
         const keyboard = new InlineKeyboard()
             .text('✏️ Enter Movie Title & Message ID', 'admin_delclip_input').row()
-            .text('🔙 Back to Console', 'admin_panel');
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
 
         await ctx.editMessageText(
             `🗑️ <b>REMOVE MISTAKEN CLIPS FROM DATABASE</b>\n\n` +
@@ -618,6 +824,46 @@ module.exports = (bot) => {
         }
     });
 
+    // /setmode Command
+    bot.command('setmode', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const arg = (ctx.match || '').trim().toLowerCase();
+        if (!['off', 'shortlink', 'token'].includes(arg)) {
+            return ctx.reply('⚙️ <b>Usage:</b> <code>/setmode off|shortlink|token</code>', { parse_mode: 'HTML' });
+        }
+        await setSetting('mode', arg);
+        return ctx.reply(`✅ <b>Monetization mode set to:</b> <code>${arg.toUpperCase()}</code>`, { parse_mode: 'HTML' });
+    });
+
+    // /setshortlink Command (Endpoint)
+    bot.command('setshortlink', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        let url = (ctx.match || '').trim();
+        if (!url) {
+            return ctx.reply('🌐 <b>Usage:</b> <code>/setshortlink https://arolinks.com/api</code>', { parse_mode: 'HTML' });
+        }
+        if (!url.startsWith('http')) url = `https://${url}`;
+        await setSetting('shortlinkBaseUrl', url);
+        return ctx.reply(`✅ <b>Shortlink Base URL saved:</b> <code>${url}</code>`, { parse_mode: 'HTML' });
+    });
+
+    // /setapikey Command
+    bot.command('setapikey', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const key = (ctx.match || '').trim();
+        if (!key) {
+            return ctx.reply('🔑 <b>Usage:</b> <code>/setapikey YOUR_API_TOKEN</code>', { parse_mode: 'HTML' });
+        }
+        await setSetting('shortlinkApiKey', key);
+        return ctx.reply(`✅ <b>Shortlink API key saved!</b> (<code>${key.substring(0, 4)}••••${key.slice(-4)}</code>)`, { parse_mode: 'HTML' });
+    });
+
+    // /settings Command
+    bot.command('settings', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await renderModeSettingsMenu(ctx, false);
+    });
+
     // ── Force Sub Menu ──────────────────────────────────────────────
     bot.callbackQuery('admin_forcesub_menu', async (ctx) => {
         if (!isAdmin(ctx)) return;
@@ -626,8 +872,9 @@ module.exports = (bot) => {
 
         const keyboard = new InlineKeyboard()
             .text('✏️ Set / Change Channel', 'admin_forcesub_change').row()
-            .text('❌ Turn Off Force Sub', 'admin_forcesub_off').row()
-            .text('🔙 Back to Console', 'admin_panel');
+            .text('🔴 Turn Off Force Sub', 'admin_forcesub_off').row()
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
 
         await ctx.editMessageText(
             `📢 <b>Force Subscribe Channel</b>\n\n` +
@@ -674,7 +921,8 @@ module.exports = (bot) => {
         const keyboard = new InlineKeyboard()
             .text('🧹 Clean & Free All Rooms Now', 'admin_clean_all_rooms').row()
             .text('➕ Add New Room', 'admin_add_room').row()
-            .text('🔙 Back to Console', 'admin_panel');
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
 
         await ctx.editMessageText(
             `🏠 <b>Room Pool Manager (${rooms.length} Total)</b>\n\n${roomList}\n` +
@@ -754,7 +1002,8 @@ module.exports = (bot) => {
 
         const keyboard = new InlineKeyboard()
             .text('🔄 Refresh', 'admin_stats_view')
-            .text('🔙 Back', 'admin_panel');
+            .text('🔙 « Back', 'admin_panel').row()
+            .text('❌ Close', 'close_msg');
 
         const text = `📊 <b>LIVE METRICS</b>\n\n` +
             `• Movies: <b>${totalMovies}</b>\n` +
@@ -773,7 +1022,9 @@ module.exports = (bot) => {
     bot.callbackQuery('admin_bc_prompt', async (ctx) => {
         if (!isAdmin(ctx)) return;
         await ctx.answerCallbackQuery();
-        const keyboard = new InlineKeyboard().text('🔙 Back to Console', 'admin_panel');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
         await ctx.editMessageText(
             `📡 <b>Broadcast to All Users</b>\n\n` +
             `To send a broadcast:\n` +

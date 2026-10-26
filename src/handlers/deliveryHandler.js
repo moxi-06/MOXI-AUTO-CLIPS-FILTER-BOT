@@ -1,3 +1,13 @@
+const { Movie, Room, User, BotSettings } = require('../database');
+const {
+    decodeMovieLink,
+    encodeMovieLink,
+    escapeHtml,
+    sleep,
+    sendToLogChannel,
+    safeDeleteRoomMessages,
+    safeKickRoomUser
+} = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
 const { InlineKeyboard } = require('grammy');
 
@@ -63,8 +73,9 @@ function buildUserDashboardKeyboard(isAdminUser = false) {
     keyboard.text('💬 Contact Admin', 'user_contact');
 
     if (isAdminUser) {
-        keyboard.row().text('⚙️ Admin Control Center', 'admin_panel');
+        keyboard.row().text('🟣 Admin Console', 'admin_panel');
     }
+    keyboard.row().text('❌ Close', 'close_msg');
 
     return keyboard;
 }
@@ -93,17 +104,21 @@ module.exports = (bot) => {
         try {
             await bot.api.sendMessage(
                 adminId,
-                `📩 <b>User Message</b>\n\n` +
+                `📩 <b>User Message:</b>\n` +
+                `👤 From: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n\n` +
+                `💬 <i>"${escapeHtml(messageText)}"</i>\n\n` +
                 `🔗 Reply to this message to reply back!`,
                 { parse_mode: 'HTML' }
             );
 
             ctx.reply(
                 `✅ <b>Message Sent!</b>\n\nYour message was forwarded to the admin.\nYou can reply anytime with <code>/contact message</code>.`,
-                { parse_mode: 'HTML' }
+                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg') }
             );
         } catch (e) {
-            ctx.reply(`❌ Could not send message to admin. Please try again later.`);
+            ctx.reply(`❌ Could not send message to admin. Please try again later.`, {
+                reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+            });
         }
     });
 
@@ -207,12 +222,11 @@ module.exports = (bot) => {
         });
 
         const totalPages = Math.ceil(total / limit);
-        const navRow = [];
-        if (page > 0) navRow.push({ text: '◀ Prev', callback_data: `user_browse_${page - 1}` });
-        if (page < totalPages - 1) navRow.push({ text: 'Next ▶', callback_data: `user_browse_${page + 1}` });
-        if (navRow.length > 0) keyboard.row(...navRow.map(b => InlineKeyboard.text(b.text, b.callback_data)));
+        if (page > 0) keyboard.text('◀ Prev', `user_browse_${page - 1}`);
+        if (page < totalPages - 1) keyboard.text('🔵 Next ▶', `user_browse_${page + 1}`);
+        if (page > 0 || page < totalPages - 1) keyboard.row();
 
-        keyboard.row().text('🔙 Back to Menu', 'user_home');
+        keyboard.text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
         const text = `🎬 <b>Movie Archive</b> (Page ${page + 1}/${Math.max(totalPages, 1)})\n<i>Tap any movie below to get clips:</i>`;
 
@@ -234,7 +248,7 @@ module.exports = (bot) => {
             const startUrl = `https://t.me/${ctx.me?.username}?start=${encodeMovieLink(m)}`;
             keyboard.url(`🔥 #${idx + 1} ${m.title.toUpperCase()} (${count})`, startUrl).row();
         });
-        keyboard.text('🔙 Back to Menu', 'user_home');
+        keyboard.text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
         const text = `🔥 <b>Trending Movies</b>\n<i>Most requested by editors right now:</i>`;
         try {
@@ -261,7 +275,8 @@ module.exports = (bot) => {
         const keyboard = new InlineKeyboard()
             .url(`⚡ Get ${randomMovie.title.toUpperCase()} (${clipCount}) »`, startUrl).row()
             .text('🎲 Roll Another', 'user_random')
-            .text('🔙 Menu', 'user_home');
+            .text('🔙 « Back', 'user_home').row()
+            .text('❌ Close', 'close_msg');
 
         const text = `🎲 <b>Random Pick:</b>\n\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
         try {
@@ -285,7 +300,9 @@ module.exports = (bot) => {
         else if (downloads >= 15) nextBadge = `${30 - downloads} more for ⚡ MOXI STAR`;
         else if (downloads >= 5) nextBadge = `${15 - downloads} more for 💫 MOXI PRO`;
 
-        const keyboard = new InlineKeyboard().text('🔙 Back to Menu', 'user_home');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'user_home')
+            .text('❌ Close', 'close_msg');
         const text = `👤 <b>Your Profile:</b> ${getUserNameForLog(ctx.from)}\n\n` +
             `• Rank: <b>${badge}</b>\n` +
             `• Searches: <b>${searches}</b>\n` +
@@ -302,7 +319,9 @@ module.exports = (bot) => {
     // 5. PM Contact Prompt
     bot.callbackQuery('user_contact', async (ctx) => {
         await ctx.answerCallbackQuery();
-        const keyboard = new InlineKeyboard().text('🔙 Back to Menu', 'user_home');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'user_home')
+            .text('❌ Close', 'close_msg');
         const text = `💬 <b>Contact Admin</b>\n\n` +
             `Send your message anytime by typing:\n` +
             `<code>/contact your message here</code>\n\n` +
@@ -459,7 +478,8 @@ module.exports = (bot) => {
 
         const clipCount = movie.files?.length || movie.messageIds.length;
         const mode = await getSetting('mode', 'off');
-
+        const tutStr = await getSetting('tutorial', null);
+        const hasTutorial = Boolean(tutStr);
 
         // ─── Mode: Token 24h Pass Required ──────────────────────────
         if (mode === 'token') {
@@ -469,8 +489,9 @@ module.exports = (bot) => {
                 const tokenStartUrl = `https://t.me/${botUsername}?start=token_${ctx.from.id}`;
                 const wrappedUrl = await wrapShortlink(tokenStartUrl);
 
-                const keyboard = new InlineKeyboard().url('⚡ Unlock 24h Free Pass »', wrappedUrl);
-                if (hasTutorial) keyboard.row().text('❓ Watch Tutorial Video', 'user_tutorial');
+                const keyboard = new InlineKeyboard().url('🟢 Unlock 24h Free Pass »', wrappedUrl).row();
+                if (hasTutorial) keyboard.text('💡 Watch Tutorial', 'user_tutorial').row();
+                keyboard.text('❌ Close', 'close_msg');
 
                 const msg = await ctx.reply(
                     `🎫 <b>24-Hour Pass Required</b>\n` +
@@ -497,8 +518,9 @@ module.exports = (bot) => {
             const verifiedStart = `https://t.me/${botUsername}?start=v_${encodeMovieLink(movie)}`;
             const wrappedUrl = await wrapShortlink(verifiedStart);
 
-            const keyboard = new InlineKeyboard().url('🔵 Verify & Open Clips »', wrappedUrl);
-            if (hasTutorial) keyboard.row().text('❓ Watch Tutorial Video', 'user_tutorial');
+            const keyboard = new InlineKeyboard().url('🟢 Verify & Open Clips »', wrappedUrl).row();
+            if (hasTutorial) keyboard.text('💡 Watch Tutorial', 'user_tutorial').row();
+            keyboard.text('❌ Close', 'close_msg');
 
             const msg = await ctx.reply(
                 `🔗 <b>Unlock Clips:</b> <code>${movie.title}</code> (${clipCount} clips)\n` +
@@ -793,7 +815,9 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         }, 30 * 60 * 1000); // 30 minutes grace period
 
         // ── 8. "Delete Old ➔ Send New" Delivery Notification ──────────
-        const keyboard = new InlineKeyboard().url(`🟢 Open My Clips Room (${newMessageIds.length}) »`, invite.invite_link);
+        const keyboard = new InlineKeyboard()
+            .url(`🟢 Open My Clips Room (${newMessageIds.length}) »`, invite.invite_link).row()
+            .text('❌ Close', 'close_msg');
         const cardText = `📦 <b>${movie.title}: ${newMessageIds.length} clips ready!</b>\n` +
             `<i>Single-use download room is open for <b>30 minutes</b>:</i>`;
 

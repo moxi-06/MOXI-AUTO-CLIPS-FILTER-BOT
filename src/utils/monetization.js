@@ -18,8 +18,8 @@ const setSetting = async (key, value) => {
 // --- Shortlink API Wrapper ---
 // Compatible with arolinks, vplinks, gplinks (they all use the same query format)
 const wrapShortlink = async (targetUrl) => {
-    const apiKey = process.env.SHORTLINK_API_KEY;
-    const baseUrl = process.env.SHORTLINK_BASE_URL; // e.g. https://arolinks.com/api
+    const apiKey = await getSetting('shortlinkApiKey', process.env.SHORTLINK_API_KEY);
+    const baseUrl = await getSetting('shortlinkBaseUrl', process.env.SHORTLINK_BASE_URL);
 
     if (!apiKey || !baseUrl) {
         // If shortlink is not configured, return the URL as-is (for testing)
@@ -65,9 +65,10 @@ const hasValidToken = async (userId) => {
     return token.expiresAt > new Date(); // Check if not expired
 };
 
-// Create/refresh a token for a user (24hr from now)
-const grantToken = async (userId) => {
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+// Create/refresh a token for a user (configurable duration, default 24h)
+const grantToken = async (userId, customHours = null) => {
+    const hours = customHours || Number(await getSetting('tokenDurationHours', 24)) || 24;
+    const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
     await Token.findOneAndUpdate(
         { userId: userId.toString() },
         { expiresAt },

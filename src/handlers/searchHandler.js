@@ -278,12 +278,16 @@ function buildFilterKeyboard(movies, page, total) {
 
     const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
 
-    if (page < totalPages - 1) {
-        keyboard.text('Next ▶', `fp_${page + 1}`).row();
-    }
     if (page > 0) {
-        keyboard.text('◀ Prev', `fp_${page - 1}`).row();
+        keyboard.text('◀ Prev', `fp_${page - 1}`);
     }
+    if (page < totalPages - 1) {
+        keyboard.text('🔵 Next ▶', `fp_${page + 1}`);
+    }
+    if (page > 0 || page < totalPages - 1) {
+        keyboard.row();
+    }
+    keyboard.text('❌ Close', 'close_msg');
 
     return keyboard;
 }
@@ -301,8 +305,12 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
     const privateStart = `https://t.me/${botUsername}?start=${encodedTitle}`;
     const clipCount = movie.files?.length || movie.messageIds?.length || 0;
     const photoFileId = movie.thumbnail || null;
-    const keyboard = new InlineKeyboard().url(`⚡ Get Clips (${clipCount}) »`, privateStart);
+    const keyboard = new InlineKeyboard()
+        .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
+        .text('❌ Close', 'close_msg');
 
+    const resultText = `🎬 <b>${movie.title}</b> • <code>${clipCount} clips</code>\n` +
+        `👤 <i>For <a href="tg://user?id=${reqSource.id}">${reqName}</a></i>`;
 
     let sentMsg;
     if (photoFileId) {
@@ -323,6 +331,17 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
     // Auto-edit after 5 minutes to keep group chat clean
     setTimeout(async () => {
         try {
+            const expireText = `⚠️ <b>SEARCH EXPIRED</b>\n\n🎬 <b>${movie.title}</b>\n<i>This result link has expired. Search again in group!</i>`;
+            if (photoFileId) {
+                await ctx.api.editMessageCaption(ctx.chat.id, sentMsg.message_id, {
+                    caption: expireText,
+                    parse_mode: 'HTML'
+                });
+            } else {
+                await ctx.api.editMessageText(ctx.chat.id, sentMsg.message_id, expireText, {
+                    parse_mode: 'HTML'
+                });
+            }
         } catch (_) { }
     }, 5 * 60 * 1000);
 
@@ -362,8 +381,11 @@ module.exports = (bot) => {
         const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(randomMovie)}`;
         const clipCount = randomMovie.files?.length || randomMovie.messageIds?.length || 0;
         const photoFileId = randomMovie.thumbnail || null;
-        const keyboard = new InlineKeyboard().url(`⚡ Get Clips (${clipCount}) »`, privateStart);
+        const keyboard = new InlineKeyboard()
+            .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
+            .text('❌ Close', 'close_msg');
 
+        const resultText = `🎲 <b>Random Pick:</b>\n\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
 
         if (photoFileId) {
             await ctx.replyWithPhoto(photoFileId, {
@@ -411,6 +433,7 @@ module.exports = (bot) => {
             const startUrl = `https://t.me/${botUsername}?start=${encodeMovieLink(m)}`;
             keyboard.url(`🔥 #${idx + 1} ${m.title.toUpperCase()} (${clipCount})`, startUrl).row();
         });
+        keyboard.text('❌ Close', 'close_msg');
 
         const trendingText = `🔥 <b>Trending Movies:</b>\n<i>Tap any movie below to get clips in your PM:</i>`;
 
@@ -561,7 +584,7 @@ module.exports = (bot) => {
                         const count = item.movie.files?.length || item.movie.messageIds.length;
                         keyboard.text(`▫️ ${item.movie.title.toUpperCase()} (${count})`, `typo_${item.movie._id}`).row();
                     });
-                    keyboard.text('✕ None of these', 'typo_no');
+                    keyboard.text('❌ Close', 'close_msg');
 
                     await ctx.reply(
                         `🔍 <b>Did you mean:</b>`,
@@ -617,6 +640,7 @@ module.exports = (bot) => {
                 if (similar.length > 0) {
                     const suggestKeyboard = new InlineKeyboard();
                     similar.forEach(m => suggestKeyboard.text(`▸ ${m.title.toUpperCase()}⠀`, `search_${m._id}`).row());
+                    suggestKeyboard.text('❌ Close', 'close_msg');
 
                     await ctx.reply(`💡 <b>You might also like:</b>`, {
                         reply_parameters: { message_id: sentMsg.message_id },
