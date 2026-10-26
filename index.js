@@ -253,11 +253,9 @@ async function bootstrap() {
                 await rateLimiter.wait(); // Rate limit protection
 
                 const promoMessages = [
-                    `🎬 <b>Need clips?</b>\n\nJust type the movie name and I'll send clips to your PM! 🍿\n\n💡 Or try <code>/random</code> for a surprise pick!`,
-                    `✨ <b>Looking for clips?</b>\n\nSearch in group and get clips! 🚀\n\n🎲 Not sure what to watch? Try <code>/random</code>!`,
-                    `🎥 <b>Want latest clips?</b>\n\nType movie name and tap the link! 📲\n\n🎲 Or use <code>/random</code> for a random movie pick!`,
-                    `🔥 <b>Quick Tip:</b>\n\nType any movie name and I'll deliver to your PM! 🎬\n\n🎲 <code>/random</code> - Get a random movie pick!`,
-                    `📊 <b>Check what's popular!</b>\n\nUse <code>/trending</code> to see top movies! 🎬`
+                    `🎬 <b>Need movie clips?</b> Type any title in this chat to get clips in PM! 🍿\n💡 <i>Try <code>/random</code> for a surprise pick!</i>`,
+                    `✨ <b>Quick Search:</b> Send any movie name here and get clips delivered! 🚀\n🔥 <i>Use <code>/trending</code> to see top requested titles!</i>`,
+                    `🎥 <b>Looking for clips?</b> Type a movie name and tap the button! 📲\n📚 <i>Type <code>/filters</code> to browse our collection!</i>`
                 ];
 
                 const randomMsg = promoMessages[Math.floor(Math.random() * promoMessages.length)];

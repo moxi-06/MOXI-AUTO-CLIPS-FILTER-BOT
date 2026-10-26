@@ -26,7 +26,7 @@ const adminCommands = [
     'addroom', 'rooms', 'cleanroom', 'broadcast', 'maintenance',
     'logs', 'restartrooms', 'settings', 'setmode', 'setshortlink',
     'setapikey', 'setforcesub', 'unsetforcesub', 'resetbot', 'unlock', 'resetstats',
-    'delclip'
+    'delclip', 'setpagesize', 'setlimit'
 ];
 
 // Helper to remove a single mistaken clip/file from database and channel
@@ -106,6 +106,7 @@ async function renderAdminPanel(ctx, isEdit = false) {
     const promoStr = await getSetting('roomPromo', null);
     const apiKey = await getSetting('shortlinkApiKey', process.env.SHORTLINK_API_KEY || '');
     const baseUrl = await getSetting('shortlinkBaseUrl', process.env.SHORTLINK_BASE_URL || '');
+    const pageSize = parseInt(await getSetting('itemsPerPage', 10), 10) || 10;
 
     let tutorialDisplay = 'None ❌';
     if (tutStr) {
@@ -130,6 +131,7 @@ async function renderAdminPanel(ctx, isEdit = false) {
 
     const text = `⚙️ <b>ADMIN CONTROL CONSOLE</b>\n` +
         `• <b>Mode:</b> ${modeLabels[mode] || mode}\n` +
+        `• <b>Filter Page Size:</b> <code>${pageSize} / page</code>\n` +
         `• <b>Shortlink API:</b> <code>${apiKey && baseUrl ? 'Configured ✅' : 'Not set ❌'}</code>\n` +
         `• <b>Force Sub:</b> <code>${forceSubChannel || 'Disabled'}</code>\n` +
         `• <b>Tutorial Video:</b> <code>${tutorialDisplay}</code>\n` +
@@ -140,15 +142,16 @@ async function renderAdminPanel(ctx, isEdit = false) {
 
     const keyboard = new InlineKeyboard()
         .text('🟣 Mode & Shortlinks', 'admin_mode_menu')
-        .text('🟣 Tutorial Video', 'admin_tut_menu').row()
-        .text('🟣 Room Promo', 'admin_promo_menu')
-        .text('🔴 Remove Clip', 'admin_delclip_menu').row()
-        .text('🟣 Force Sub', 'admin_forcesub_menu')
-        .text('🟣 Room Manager', 'admin_rooms_menu').row()
-        .text('🟣 Live Analytics', 'admin_stats_view')
-        .text('🟣 Broadcast', 'admin_bc_prompt').row()
-        .text(`🔒 Maintenance: ${maintenance ? 'ON' : 'OFF'}`, 'admin_maint_toggle')
-        .text('🔄 Refresh Panel', 'admin_panel').row()
+        .text(`📄 Page Size: ${pageSize}`, 'admin_pagesize_menu').row()
+        .text('🟣 Tutorial Video', 'admin_tut_menu')
+        .text('🟣 Room Promo', 'admin_promo_menu').row()
+        .text('🔴 Remove Clip', 'admin_delclip_menu')
+        .text('🟣 Force Sub', 'admin_forcesub_menu').row()
+        .text('🟣 Room Manager', 'admin_rooms_menu')
+        .text('🟣 Live Analytics', 'admin_stats_view').row()
+        .text('🟣 Broadcast', 'admin_bc_prompt')
+        .text(`🔒 Maintenance: ${maintenance ? 'ON' : 'OFF'}`, 'admin_maint_toggle').row()
+        .text('🔄 Refresh Panel', 'admin_panel')
         .text('❌ Close', 'close_msg');
 
     if (isEdit) {
@@ -331,6 +334,32 @@ module.exports = (bot) => {
             });
         }
 
+        // 4.7. Awaiting Custom Page Size (1-50)
+        if (state && state.action === 'awaiting_pagesize') {
+            const input = ctx.message.text?.trim();
+            if (input === '/cancel' || input?.toLowerCase() === 'cancel') {
+                delete global.adminState[ctx.from.id];
+                return ctx.reply('❌ Page size update cancelled.', {
+                    reply_markup: new InlineKeyboard().text('🔙 « Back', 'admin_pagesize_menu')
+                });
+            }
+
+            const num = parseInt(input, 10);
+            if (isNaN(num) || num < 1 || num > 50) {
+                return ctx.reply('❌ Please enter a valid number between <b>1 and 50</b>.\n(Example: <code>12</code> or <code>20</code>)', {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('🔙 « Back', 'admin_pagesize_menu').text('🔴 Cancel', 'admin_cancel_input')
+                });
+            }
+
+            delete global.adminState[ctx.from.id];
+            await setSetting('itemsPerPage', num);
+            return ctx.reply(`✅ <b>Page Size Saved!</b>\nNow displaying <b>${num}</b> filters per page.`, {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('📄 Page Size Menu', 'admin_pagesize_menu').text('⚙️ Console', 'admin_panel')
+            });
+        }
+
         // 5. Awaiting Manual Delete Clip Input
         if (state && state.action === 'awaiting_delclip') {
             const input = ctx.message.text?.trim();
@@ -447,13 +476,12 @@ module.exports = (bot) => {
             .text('🔙 « Back', 'admin_panel')
             .text('❌ Close', 'close_msg');
 
-        const text = `⚙️ <b>MONETIZATION & SHORTLINK SETTINGS</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `• <b>Current Mode:</b> <code>${currentMode.toUpperCase()}</code>\n` +
-            `• <b>Shortlink API Key:</b> <code>${maskedKey}</code>\n` +
-            `• <b>Shortlink Endpoint:</b> <code>${endpointDisplay}</code>\n` +
-            `• <b>Token Pass Duration:</b> <code>${tokenHours} Hours</code>\n\n` +
-            `<i>Tap any option below to change mode, configure API keys, or test:</i>`;
+        const text = `⚙️ <b>Monetization & Shortlinks:</b>\n\n` +
+            `• <b>Mode:</b> <code>${currentMode.toUpperCase()}</code>\n` +
+            `• <b>API Key:</b> <code>${maskedKey}</code>\n` +
+            `• <b>Endpoint:</b> <code>${endpointDisplay}</code>\n` +
+            `• <b>Pass Duration:</b> <code>${tokenHours} Hours</code>\n\n` +
+            `<i>Tap any option below to configure or test:</i>`;
 
         if (isEdit) {
             try {
@@ -734,12 +762,10 @@ module.exports = (bot) => {
             .text('❌ Close', 'close_msg');
 
         await ctx.editMessageText(
-            `🗑️ <b>REMOVE MISTAKEN CLIPS FROM DATABASE</b>\n\n` +
-            `Did you mistakenly post the wrong file or message to the DB channel?\n\n` +
-            `<b>Two easy ways to remove it:</b>\n` +
-            `1️⃣ <b>Magic Method:</b> Simply <b>forward that mistake message</b> from your DB channel directly to this PM chat!\n` +
-            `2️⃣ <b>Manual Method:</b> Tap the button below and send: <code>Movie Title | Message ID</code>\n` +
-            `3️⃣ Or type command: <code>/delclip [Movie Title] [Message ID]</code>`,
+            `🗑️ <b>Remove Mistaken Clip:</b>\n\n` +
+            `• <b>Forward:</b> Forward the clip directly from DB channel to this PM!\n` +
+            `• <b>Button:</b> Tap below to enter Movie Title & Message ID\n` +
+            `• <b>Command:</b> <code>/delclip [Movie Title] [Message ID]</code>`,
             { parse_mode: 'HTML', reply_markup: keyboard }
         );
     });
@@ -1195,12 +1221,9 @@ module.exports = (bot) => {
 
         await ctx.reply(
             `👥 <b>User Management</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `This will:\n` +
-            `1. Check all users for blocked status\n` +
-            `2. Remove blocked users from database\n` +
-            `3. Export clean user list as JSON\n\n` +
-            `⚠️ This may take a few minutes depending on user count.`,
+            `• Check & remove blocked/inactive users\n` +
+            `• Export clean user database as JSON\n\n` +
+            `<i>Confirm to begin cleanup:</i>`,
             { parse_mode: 'HTML', reply_markup: keyboard }
         );
     });
@@ -1253,11 +1276,10 @@ module.exports = (bot) => {
 
             try {
                 await ctx.editMessageText(
-                    `✅ <b>User Cleanup Complete</b>\n\n` +
-                    `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                    `🗑️ Removed: ${cleanedCount} blocked users\n` +
-                    `✅ Remaining: ${remainingUsers.length} users\n\n` +
-                    `Sending JSON file...`,
+                    `✅ <b>User Cleanup Complete!</b>\n\n` +
+                    `• Removed: <b>${cleanedCount}</b> blocked users\n` +
+                    `• Remaining: <b>${remainingUsers.length}</b> users\n\n` +
+                    `<i>Export file attached below:</i>`,
                     { parse_mode: 'HTML' }
                 );
             } catch (e) {

@@ -8,8 +8,8 @@ function getUserNameForLog(user) {
 }
 
 const getWelcomeKeyboard = () => new InlineKeyboard()
-    .text('📖 Step-by-Step Guide', 'welcome_guide')
-    .text('🎬 See All Movies', 'welcome_movies').row()
+    .text('📖 Guide', 'welcome_guide')
+    .text('🎬 All Movies', 'welcome_movies').row()
     .text('❓ Help', 'welcome_help');
 
 module.exports = (bot) => {
@@ -25,23 +25,17 @@ module.exports = (bot) => {
         if (!user || (ctx.me && user.id === ctx.me.id)) return;
 
         // Log new group member
-        await sendToLogChannel(bot, `👥 <b>New Group Member</b>\n\n👤 User: ${getUserNameForLog(user)} (<code>${user.id}</code>)\n📅 Joined: ${new Date().toLocaleString()}\n\n#newmember 👋`);
+        await sendToLogChannel(bot, `👥 <b>New Member:</b> ${getUserNameForLog(user)} (<code>${user.id}</code>)`);
 
         try {
             const welcomeKeyboard = getWelcomeKeyboard();
 
             await ctx.reply(
-                `👋 <b>WELCOME TO THE GROUP!</b>\n\n` +
-                `🎬 <b>Movie Clips Assistant</b> at your service!\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `🚀 <b>QUICK START:</b>\n` +
-                `1️⃣ Type any Movie Name here\n` +
-                `2️⃣ Tap the button I reply with\n` +
-                `3️⃣ Click the link in your PM\n` +
-                `4️⃣ All clips delivered instantly! 📬\n\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `💡 <b>Example:</b> <code>Leo</code> • <code>Jawan</code>\n\n` +
-                `🎯 <b>Try it now!</b> Type a movie name below 👇`,
+                `👋 <b>Welcome to the Movie Group!</b> 🍿\n\n` +
+                `🎬 <b>How to get clips:</b>\n` +
+                `• Type any movie title in this chat\n` +
+                `• Tap the button on my reply to get clips in PM!\n\n` +
+                `💡 <i>Example: <code>Leo</code> or <code>Jawan</code></i>`,
                 {
                     parse_mode: 'HTML',
                     reply_markup: welcomeKeyboard
@@ -83,25 +77,11 @@ module.exports = (bot) => {
             .text('🔙 « Back', 'welcome_home');
 
         await ctx.editMessageText(
-            `📖 <b>STEP-BY-STEP GUIDE</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `🎬 <b>HOW TO GET CLIPS:</b>\n\n` +
-            `1️⃣ <b>Search</b>\n` +
-            `Type any movie name in this group\n` +
-            `Example: <code>Leo</code> or <code>Oppenheimer</code>\n\n` +
-            `2️⃣ <b>Get Button</b>\n` +
-            `I'll reply with a button\n\n` +
-            `3️⃣ <b>Click Button</b>\n` +
-            `Tap the button I send\n\n` +
-            `4️⃣ <b>Get Clips</b>\n` +
-            `All clips open in your PM!\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `💡 <b>TIPS:</b>\n` +
-            `• Type full movie name for best results\n` +
-            `• Don't worry about spelling - I can fix typos!\n` +
-            `• Use /filters to see all movies\n` +
-            `• If not found, I'll suggest similar ones\n\n` +
-            `❓ Need help? Type /help anytime!`,
+            `📖 <b>How to Get Clips:</b>\n\n` +
+            `1️⃣ <b>Search:</b> Type any movie name in this chat\n` +
+            `2️⃣ <b>Open:</b> Tap the button on my reply\n` +
+            `3️⃣ <b>Enjoy:</b> Get all clips delivered directly in PM!\n\n` +
+            `💡 <i>Tip: We auto-correct typos & spelling mistakes!</i>`,
             { parse_mode: 'HTML', reply_markup: navKeyboard }
         );
     });
@@ -112,25 +92,12 @@ module.exports = (bot) => {
             .text('🔙 « Back', 'welcome_home');
 
         await ctx.editMessageText(
-            `❓ <b>HELP & FAQ</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `🎬 <b>How to get clips:</b>\n` +
-            `1️⃣ Type movie name in group\n` +
-            `2️⃣ Click the button I send\n` +
-            `3️⃣ Get clips in your PM!\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `💡 <b>Commands:</b>\n` +
-            `• <code>/filters</code> - See all movies\n` +
-            `• <code>/help</code> - Show full help\n` +
-            `• <code>/myprofile</code> - Your stats\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `❓ <b>FAQ:</b>\n\n` +
-            `Q: Movie not found?\n` +
-            `A: I'll suggest similar movies!\n\n` +
-            `Q: Wrong spelling?\n` +
-            `A: Don't worry! I fix typos automatically.\n\n` +
-            `Q: Need help?\n` +
-            `A: Contact admin anytime!`,
+            `❓ <b>Quick Help & Commands:</b>\n\n` +
+            `• <code>/filters</code> — Browse all indexed movies\n` +
+            `• <code>/trending</code> — See top requested movies\n` +
+            `• <code>/random</code> — Get a surprise movie pick\n` +
+            `• <code>/myprofile</code> — Check your clips & token stats\n\n` +
+            `💡 <i>Type any movie title directly in group to search!</i>`,
             { parse_mode: 'HTML', reply_markup: navKeyboard }
         );
     });
@@ -141,14 +108,9 @@ module.exports = (bot) => {
             .text('🔙 « Back', 'welcome_home');
 
         await ctx.editMessageText(
-            `🎬 <b>ALL MOVIES LIST</b>\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `Type <code>/filters</code> to see everything we have!\n\n` +
-            `💡 <b>PRO TIPS:</b>\n` +
-            `• Use /filters to browse\n` +
-            `• Or just type a movie name\n` +
-            `• I fix your typos! ✨\n\n` +
-            `🎯 <b>Happy searching!</b> 👆`,
+            `🎬 <b>All Movies:</b>\n\n` +
+            `Send <code>/filters</code> to browse our complete collection!\n\n` +
+            `💡 <i>Or simply type any movie title directly in this chat.</i>`,
             { parse_mode: 'HTML', reply_markup: navKeyboard }
         );
     });
@@ -156,17 +118,11 @@ module.exports = (bot) => {
     bot.callbackQuery('welcome_home', async (ctx) => {
         await ctx.answerCallbackQuery();
         await ctx.editMessageText(
-            `👋 <b>WELCOME TO THE GROUP!</b>\n\n` +
-            `🎬 <b>Movie Clips Assistant</b> at your service!\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `🚀 <b>QUICK START:</b>\n` +
-            `1️⃣ Type any Movie Name here\n` +
-            `2️⃣ Tap the button I reply with\n` +
-            `3️⃣ Click the link in your PM\n` +
-            `4️⃣ All clips delivered instantly! 📬\n\n` +
-            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-            `💡 <b>Example:</b> <code>Leo</code> • <code>Jawan</code>\n\n` +
-            `🎯 <b>Try it now!</b> Type a movie name below 👇`,
+            `👋 <b>Welcome to the Movie Group!</b> 🍿\n\n` +
+            `🎬 <b>How to get clips:</b>\n` +
+            `• Type any movie title in this chat\n` +
+            `• Tap the button on my reply to get clips in PM!\n\n` +
+            `💡 <i>Example: <code>Leo</code> or <code>Jawan</code></i>`,
             { parse_mode: 'HTML', reply_markup: getWelcomeKeyboard() }
         );
     });

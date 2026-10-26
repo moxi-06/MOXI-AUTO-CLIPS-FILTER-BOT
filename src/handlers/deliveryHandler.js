@@ -94,10 +94,10 @@ module.exports = (bot) => {
 
         if (!messageText) {
             return ctx.reply(
-                `💬 <b>Contact Admin</b>\n\n` +
-                `Type: <code>/contact your message here</code>\n\n` +
-                `<i>Example: /contact Can you please add Leo clips?</i>`,
-                { parse_mode: 'HTML' }
+                `💬 <b>Contact Admin:</b>\n` +
+                `Type: <code>/contact your message</code>\n\n` +
+                `<i>Example: /contact Please add Leo movie clips!</i>`,
+                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg') }
             );
         }
 
@@ -112,7 +112,7 @@ module.exports = (bot) => {
             );
 
             ctx.reply(
-                `✅ <b>Message Sent!</b>\n\nYour message was forwarded to the admin.\nYou can reply anytime with <code>/contact message</code>.`,
+                `✅ <b>Message Sent!</b>\nYour message was forwarded to the admin.`,
                 { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg') }
             );
         } catch (e) {
@@ -435,14 +435,19 @@ module.exports = (bot) => {
         const releaseLock = async () => await User.findOneAndUpdate({ userId: ctx.from.id }, { isDelivering: false });
 
         if (!lockoutResult) {
-            return ctx.reply('⏳ <b>Please wait!</b>\nYour previous request is still processing. Try again in a minute.', { parse_mode: 'HTML' });
+            return ctx.reply('⏳ <b>Please wait!</b>\nYour previous request is still processing. Try again in a minute.', {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+            });
         }
 
         // ─── Token Claim: /start token_USERID ───────────────────────
         if (moviePayload.startsWith('token_')) {
             const userId = moviePayload.replace('token_', '');
             if (ctx.from.id.toString() !== userId) {
-                const e = await ctx.reply('❌ This pass link belongs to another user.');
+                const e = await ctx.reply('❌ This pass link belongs to another user.', {
+                    reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+                });
                 autoDelete(ctx.api, ctx.chat.id, e.message_id);
                 await releaseLock();
                 return;
@@ -450,8 +455,8 @@ module.exports = (bot) => {
             const expiresAt = await grantToken(userId);
             const expireStr = expiresAt.toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
             const msg = await ctx.reply(
-                `🎫 <b>24-Hour Pass Active!</b>\nValid until today at ${expireStr}.\nYou can now download unlimited clips!`,
-                { parse_mode: 'HTML' }
+                `🎫 <b>24-Hour Pass Active!</b>\nValid until ${expireStr}.\nYou have unlimited clip downloads!`,
+                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg') }
             );
             autoDelete(ctx.api, ctx.chat.id, msg.message_id);
             await releaseLock();
@@ -470,7 +475,10 @@ module.exports = (bot) => {
         }
 
         if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
-            const e = await ctx.reply('❌ <b>Clips not found!</b>\nThis movie has been removed or does not exist.', { parse_mode: 'HTML' });
+            const e = await ctx.reply('❌ <b>Clips not found!</b>\nThis movie has been removed or does not exist.', {
+                parse_mode: 'HTML',
+                reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+            });
             autoDelete(ctx.api, ctx.chat.id, e.message_id);
             await releaseLock();
             return;

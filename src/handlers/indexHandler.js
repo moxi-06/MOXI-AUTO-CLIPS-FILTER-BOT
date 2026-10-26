@@ -149,16 +149,9 @@ module.exports = (bot) => {
         const args = ctx.match.split('|');
         if (args.length < 3) {
             return ctx.reply(
-                `📥 <b>ADD NEW MOVIE</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `<b>Usage:</b>\n` +
-                `<code>/addmovie MovieName | start_link | end_link | #category</code>\n\n` +
-                `📝 <b>Example:</b>\n` +
-                `<code>/addmovie Leo | https://t.me/c/123/1 | https://t.me/c/123/10 | #Vijay</code>\n\n` +
-                `💡 <b>Tips:</b>\n` +
-                `• Links must be from your database channel\n` +
-                `• Categories help in search results\n` +
-                `• All messages in range will be added!`,
+                `📥 <b>Add New Movie:</b>\n` +
+                `<code>/addmovie Name | start_link | end_link | #category</code>\n\n` +
+                `<i>Example: /addmovie Leo | https://t.me/c/123/1 | https://t.me/c/123/10 | #Vijay</i>`,
                 { parse_mode: 'HTML' }
             );
         }
@@ -330,13 +323,9 @@ module.exports = (bot) => {
         const args = ctx.match.trim();
         if (!args) {
             return ctx.reply(
-                `🖼️ <b>SET THUMBNAIL</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `<b>How to set:</b>\n` +
-                `1️⃣ Reply to any photo\n` +
-                `2️⃣ Type: <code>/thumb movie_name</code>\n\n` +
-                `<b>Commands:</b>\n` +
-                `• <code>/thumb list</code> - See movie list`,
+                `🖼️ <b>Set Movie Thumbnail:</b>\n` +
+                `Reply to any photo with: <code>/thumb movie_name</code>\n` +
+                `• Type <code>/thumb list</code> to see movies`,
                 { parse_mode: 'HTML' }
             );
         }
@@ -347,8 +336,7 @@ module.exports = (bot) => {
                 return ctx.reply(`No movies yet!`);
             }
 
-            let text = `🖼️ <b>AVAILABLE MOVIES</b>\n`;
-            text += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
+            let text = `🖼️ <b>Available Movies:</b>\n\n`;
             movies.forEach((m, i) => {
                 text += `🎬 <code>${m.title}</code>${m.thumbnail ? ' ✅' : ' ❌'}\n`;
             });
@@ -421,12 +409,9 @@ module.exports = (bot) => {
         const args = ctx.match.trim();
         if (!args) {
             return ctx.reply(
-                `🗑️ <b>DELETE MOVIE</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `<b>Usage:</b>\n` +
-                `<code>/delmovie movie_name</code>\n\n` +
-                `<b>Commands:</b>\n` +
-                `• <code>/delmovie list</code> - See database list`,
+                `🗑️ <b>Delete Movie:</b>\n` +
+                `<code>/delmovie movie_name</code>\n` +
+                `• Type <code>/delmovie list</code> to see database movies`,
                 { parse_mode: 'HTML' }
             );
         }
@@ -437,12 +422,11 @@ module.exports = (bot) => {
                 return ctx.reply(`No movies in database!`);
             }
 
-            let text = `🗑️ <b>DATABASE LIST</b>\n`;
-            text += `━━━━━━━━━ ✦ ━━━━━━━━━\n\n`;
+            let text = `🗑️ <b>Database Movies:</b>\n\n`;
             movies.forEach((m, i) => {
                 text += `🎬 <code>${m.title}</code>\n`;
             });
-            text += `\n<b>Use:</b> <code>/delmovie movie_name</code>`;
+            text += `\n<i>Use: <code>/delmovie movie_name</code></i>`;
 
             return ctx.reply(text, { parse_mode: 'HTML' });
         }
@@ -488,13 +472,9 @@ module.exports = (bot) => {
         const args = ctx.match.split('|');
         if (args.length < 2) {
             return ctx.reply(
-                `✏️ <b>Rename Filter</b>\n` +
-                `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
-                `<b>Usage:</b>\n` +
-                `/rename old_name | new_name\n\n` +
-                `<b>Example:</b>\n` +
-                `/rename moana | Moana (2016)\n\n` +
-                `💡 <i>Tip: Use | to separate old and new names</i>`,
+                `✏️ <b>Rename Movie Filter:</b>\n` +
+                `<code>/rename old_name | new_name</code>\n\n` +
+                `<i>Example: /rename moana | Moana (2016)</i>`,
                 { parse_mode: 'HTML' }
             );
         }

@@ -12,7 +12,7 @@ const safeAnswer = async (ctx, options = {}) => {
     }
 };
 
-const ITEMS_PER_PAGE = 30;
+const ITEMS_PER_PAGE = 10;
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -331,7 +331,7 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
     // Auto-edit after 5 minutes to keep group chat clean
     setTimeout(async () => {
         try {
-            const expireText = `⚠️ <b>SEARCH EXPIRED</b>\n\n🎬 <b>${movie.title}</b>\n<i>This result link has expired. Search again in group!</i>`;
+            const expireText = `⚠️ <b>Link Expired:</b> 🎬 <b>${movie.title}</b>\n<i>Please search again in group!</i>`;
             if (photoFileId) {
                 await ctx.api.editMessageCaption(ctx.chat.id, sentMsg.message_id, {
                     caption: expireText,
@@ -357,8 +357,7 @@ module.exports = (bot) => {
 
         if (!isGroup) {
             const reply = await ctx.reply(
-                `👋 <b>Use /random in the group!</b>\n\n` +
-                `Join our group and type /random to discover movies!`,
+                `🎲 <b>Group Command:</b> Send <code>/random</code> in our group to get a surprise movie!`,
                 { parse_mode: 'HTML' }
             );
             deleteTriggerMessage(ctx);
@@ -385,7 +384,7 @@ module.exports = (bot) => {
             .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
             .text('❌ Close', 'close_msg');
 
-        const resultText = `🎲 <b>Random Pick:</b>\n\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
+        const resultText = `🎲 <b>Random Pick:</b>\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
 
         if (photoFileId) {
             await ctx.replyWithPhoto(photoFileId, {
@@ -410,8 +409,7 @@ module.exports = (bot) => {
 
         if (!isGroup) {
             const reply = await ctx.reply(
-                `👋 <b>Use /trending in the group!</b>\n\n` +
-                `Join our group to see what's trending!`,
+                `🔥 <b>Group Command:</b> Send <code>/trending</code> in our group to see popular titles!`,
                 { parse_mode: 'HTML' }
             );
             deleteTriggerMessage(ctx);
@@ -435,7 +433,7 @@ module.exports = (bot) => {
         });
         keyboard.text('❌ Close', 'close_msg');
 
-        const trendingText = `🔥 <b>Trending Movies:</b>\n<i>Tap any movie below to get clips in your PM:</i>`;
+        const trendingText = `🔥 <b>Trending Movies:</b>\n<i>Tap below to get clips in your PM:</i>`;
 
         await ctx.reply(trendingText, {
             parse_mode: 'HTML',
@@ -475,15 +473,13 @@ module.exports = (bot) => {
         if (isFiltersCommand) {
             // If not in group, guide user to group
             if (!isGroup) {
+                const groupLink = process.env.GROUP_LINK || '';
+                const kb = new InlineKeyboard();
+                if (groupLink) kb.url('👥 Open Group Chat »', groupLink).row();
+                kb.text('❌ Close', 'close_msg');
                 return ctx.reply(
-                    `👋 <b>Hey there!</b>\n\n` +
-                    `This bot works in the group - you need to search for movies there!\n\n` +
-                    `📝 <b>How to use:</b>\n` +
-                    `1️⃣ Join our group\n` +
-                    `2️⃣ Type any movie name\n` +
-                    `3️⃣ Get clips in your PM!\n\n` +
-                    `🎬 <b>Group Link:</b> ${process.env.GROUP_LINK || 'Ask admin for the group link'}`,
-                    { parse_mode: 'HTML' }
+                    `💬 <b>Search in Our Group!</b>\nSend any movie title in our group chat to get clips in PM.`,
+                    { parse_mode: 'HTML', reply_markup: kb }
                 );
             }
 
@@ -530,13 +526,13 @@ module.exports = (bot) => {
 
         // 2. Handle Movie Title Search (ONLY in Group)
         if (!isGroup) {
-            // Guide user to type in group
+            const groupLink = process.env.GROUP_LINK || '';
+            const kb = new InlineKeyboard();
+            if (groupLink) kb.url('👥 Open Search Group »', groupLink).row();
+            kb.text('❌ Close', 'close_msg');
             const reply = await ctx.reply(
-                `👋 <b>Use me in the group!</b>\n\n` +
-                `Search for movies right in the group chat - that's where the magic happens!\n\n` +
-                `📝 <b>Just type a movie name in the group</b> and I'll send clips to your PM.\n\n` +
-                `🎬 <b>Group Link:</b> ${process.env.GROUP_LINK || 'Ask admin for the group link'}`,
-                { parse_mode: 'HTML' }
+                `💬 <b>Search in Our Group!</b>\nType any movie title in our group chat to get clips sent to PM!`,
+                { parse_mode: 'HTML', reply_markup: kb }
             );
             deleteTriggerMessage(ctx);
             return;
@@ -605,7 +601,7 @@ module.exports = (bot) => {
                         { title: { $regex: query, $options: 'i' } },
                         { categories: { $regex: `\\b${query}\\b`, $options: 'i' } } // Word boundary for categories
                     ]
-                }).limit(5).lean();
+                }).limit(10).lean();
 
                 if (fuzzyMovies.length === 1) {
                     movie = fuzzyMovies[0];
@@ -616,12 +612,10 @@ module.exports = (bot) => {
                         const count = m.files?.length || m.messageIds.length;
                         keyboard.text(`▸ ${m.title.toUpperCase()} (${count})⠀`, `search_${m._id}`).row();
                     });
+                    keyboard.text('❌ Close', 'close_msg');
 
                     return await ctx.reply(
-                        `🔍 <b>SEARCH RESULTS</b>\n` +
-                        `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                        `Multiple matches found for "<code>${query}</code>":\n\n` +
-                        `👇 <b>Tap a movie to get clips:</b>`,
+                        `🔍 <b>Matches for:</b> "<code>${query}</code>"\n<i>Tap below to get clips in PM:</i>`,
                         {
                             parse_mode: 'HTML',
                             reply_markup: keyboard,
@@ -652,9 +646,10 @@ module.exports = (bot) => {
                 // Not found
                 await ctx.reply(
                     `❌ <b>Not found:</b> "<code>${query}</code>"\n` +
-                    `<i>Check spelling or ask an admin to add it.</i>`,
+                    `<i>Check spelling or ask admin to add it!</i>`,
                     {
                         parse_mode: 'HTML',
+                        reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg'),
                         reply_parameters: { message_id: ctx.message.message_id }
                     }
                 );
@@ -707,7 +702,9 @@ module.exports = (bot) => {
         const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
         const clipCount = movie.files?.length || movie.messageIds?.length || 0;
         const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(movie)}`;
-        const keyboard = new InlineKeyboard().url(`⚡ Get Clips (${clipCount}) »`, privateStart);
+        const keyboard = new InlineKeyboard()
+            .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
+            .text('❌ Close', 'close_msg');
 
         const reqSource = ctx.from;
         const reqName = reqSource.first_name || reqSource.username || 'User';
@@ -805,12 +802,8 @@ module.exports = (bot) => {
 
             const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
 
-            const helpText = `🎬 Available Movie Clips\n` +
-                `━━━━━━━━━━━━━━━━━━━━\n\n` +
-                `Tap a movie below to get clips sent to your PM!\n\n` +
-                `📄 Total: ${session.movieIds.length} movies\n` +
-                `📑 Page: ${page + 1} of ${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)}\n\n` +
-                `✨ Works in PM only - clips open in your private chat!`;
+            const helpText = `🎬 <b>Available Movies</b> (Page ${page + 1}/${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)})\n` +
+                `<i>Total: ${session.movieIds.length} titles • Tap below to get clips in PM:</i>`;
 
             await safeAnswer(ctx);
             try {
