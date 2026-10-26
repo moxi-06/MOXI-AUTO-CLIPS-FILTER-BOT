@@ -299,25 +299,58 @@ function buildFilterKeyboard(movies, page, total, pageSize = 10) {
     return keyboard;
 }
 
+// Helper to extract ratio from title or fallback to 16:9
+function extractRatio(title) {
+    if (!title) return '16:9';
+    const match = title.match(/\b(16:9|9:16|4:3|1:1|21:9)\b/i);
+    return match ? match[1] : '16:9';
+}
+
+// Helper to format the rich movie result card with Ratio, Credits, and details
+function formatMovieResultText(movie, reqSource, header = null) {
+    const details = extractMovieDetails(movie.title);
+    const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
+    const clipCount = movie.files?.length || movie.messageIds?.length || 0;
+    const reqName = reqSource.first_name || reqSource.username || 'User';
+    const ratio = extractRatio(movie.title);
+    const cleanName = details.name.replace(/\b(16:9|9:16|4:3|1:1|21:9)\b/ig, '').replace(/[\s\-_]+$/, '').trim() || details.name;
+
+    const category = (movie.categories && movie.categories.length > 0)
+        ? movie.categories.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join(', ')
+        : 'Love 💗';
+
+    let text = '';
+    if (header) {
+        text += `${header}\n`;
+    }
+    text += `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+        `👤 <b>Requested by:</b> <a href="tg://user?id=${reqSource.id}">${reqName}</a>\n\n` +
+        `<b>Name:</b> ${cleanName}\n` +
+        `<b>Type:</b> ${category}\n` +
+        `<b>Ratio:</b> ${ratio}\n` +
+        `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
+        `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+        `😍👇 Click below to get clips`;
+
+    return text;
+}
+
 // Helper to send a consistent movie result
 async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser = null) {
     await Movie.updateOne({ _id: movie._id }, { $inc: { requests: 1 } });
     await updateUserStats(ctx.from.id, 'search');
 
     const reqSource = reqUser || ctx.from;
-    const reqName = reqSource.first_name || reqSource.username || 'User';
-
     const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
     const encodedTitle = encodeMovieLink(movie);
     const privateStart = `https://t.me/${botUsername}?start=${encodedTitle}`;
     const clipCount = movie.files?.length || movie.messageIds?.length || 0;
     const photoFileId = movie.thumbnail || null;
     const keyboard = new InlineKeyboard()
-        .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
+        .url(`⚡ Get Clips »`, privateStart).row()
         .text('❌ Close', 'close_msg');
 
-    const resultText = `🎬 <b>${movie.title}</b> • <code>${clipCount} clips</code>\n` +
-        `👤 <i>For <a href="tg://user?id=${reqSource.id}">${reqName}</a></i>`;
+    const resultText = formatMovieResultText(movie, reqSource);
 
     let sentMsg;
     if (photoFileId) {
@@ -352,33 +385,29 @@ async function sendMovieResult(ctx, movie, bot, isAutoMatched = false, reqUser =
         } catch (_) { }
     }, 5 * 60 * 1000);
 
-    await sendToLogChannel(bot, `🔍 ${getUserNameForLog(ctx)} | ${movie.title} (${clipCount} clips)`);
+    await sendToLogChannel(
+        bot,
+        `🔍 <b>Movie Found:</b> <i>${escapeHtml(movie.title)}</i> (${clipCount} clips)\n` +
+        `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx))} (<code>${ctx.from?.id}</code>)\n` +
+        `🔗 <b>DM Link:</b> ${privateStart}`
+    );
     return sentMsg;
 }
 
 module.exports = (bot) => {
-    // Random movie command
+    // Random movie command (works in Group and PM)
     bot.command('random', async (ctx) => {
-        const groupId = process.env.GROUP_ID;
-        const isGroup = groupId && ctx.chat.id.toString() === groupId;
-
-        if (!isGroup) {
-            const reply = await ctx.reply(
-                `🎲 <b>Group Command:</b> Send <code>/random</code> in our group to get a surprise movie!`,
-                { parse_mode: 'HTML' }
-            );
+        const isPrivate = ctx.chat.type === 'private';
+        const count = await Movie.countDocuments();
+        if (count === 0) {
+            const reply = await ctx.reply('📭 No movies available yet!', { reply_parameters: { message_id: ctx.message?.message_id } });
             deleteTriggerMessage(ctx);
             return;
         }
 
-        const movies = await Movie.find().lean();
-        if (movies.length === 0) {
-            const reply = await ctx.reply('📭 No movies available yet!');
-            deleteTriggerMessage(ctx);
-            return;
-        }
-
-        const randomMovie = movies[Math.floor(Math.random() * movies.length)];
+        const randomIdx = Math.floor(Math.random() * count);
+        const randomMovie = await Movie.findOne().skip(randomIdx);
+        if (!randomMovie) return;
 
         await updateUserStats(ctx.from.id, 'search');
         await Movie.updateOne({ _id: randomMovie._id }, { $inc: { requests: 1 } });
@@ -387,11 +416,17 @@ module.exports = (bot) => {
         const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(randomMovie)}`;
         const clipCount = randomMovie.files?.length || randomMovie.messageIds?.length || 0;
         const photoFileId = randomMovie.thumbnail || null;
-        const keyboard = new InlineKeyboard()
-            .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
-            .text('❌ Close', 'close_msg');
 
-        const resultText = `🎲 <b>Random Pick:</b>\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
+        const keyboard = new InlineKeyboard()
+            .url(`⚡ Get Clips »`, privateStart).row();
+
+        if (isPrivate) {
+            keyboard.text('🎲 Roll Another', 'user_random')
+                .text('🔙 « Back', 'user_home').row();
+        }
+        keyboard.text('❌ Close', 'close_msg');
+
+        const resultText = formatMovieResultText(randomMovie, ctx.from, '🎲 <b>RANDOM PICK FOR YOU!</b>');
 
         if (photoFileId) {
             await ctx.replyWithPhoto(photoFileId, {
@@ -407,6 +442,13 @@ module.exports = (bot) => {
                 reply_parameters: { message_id: ctx.message.message_id }
             });
         }
+
+        await sendToLogChannel(
+            bot,
+            `🎲 <b>Random Movie Rolled:</b> <i>${escapeHtml(randomMovie.title)}</i> (${clipCount} clips)\n` +
+            `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx))} (<code>${ctx.from?.id}</code>)\n` +
+            `🔗 <b>DM Link:</b> ${privateStart}`
+        );
     });
 
     // Trending movies command
@@ -712,7 +754,7 @@ module.exports = (bot) => {
         const clipCount = movie.files?.length || movie.messageIds?.length || 0;
         const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(movie)}`;
         const keyboard = new InlineKeyboard()
-            .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row();
+            .url(`⚡ Get Clips »`, privateStart).row();
 
         if (showBackToFilters) {
             keyboard.text('🔙 « Back to Filters', 'return_filters').row();
@@ -720,9 +762,7 @@ module.exports = (bot) => {
         keyboard.text('❌ Close', 'close_msg');
 
         const reqSource = ctx.from;
-        const reqName = reqSource.first_name || reqSource.username || 'User';
-        const resultText = `🎬 <b>${movie.title}</b> • <code>${clipCount} clips</code>\n` +
-            `👤 <i>For <a href="tg://user?id=${reqSource.id}">${reqName}</a></i>`;
+        const resultText = formatMovieResultText(movie, reqSource);
 
         if (movie.thumbnail) {
             await ctx.replyWithPhoto(movie.thumbnail, {
@@ -743,6 +783,13 @@ module.exports = (bot) => {
                 });
             }
         }
+
+        await sendToLogChannel(
+            bot,
+            `🔍 <b>Filter Selected:</b> <i>${escapeHtml(movie.title)}</i> (${clipCount} clips)\n` +
+            `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx))} (<code>${ctx.from?.id}</code>)\n` +
+            `🔗 <b>DM Link:</b> ${privateStart}`
+        );
     };
 
     // Handle typo suggestion - Yes

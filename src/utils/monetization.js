@@ -1,21 +1,31 @@
 const axios = require('axios');
 const { Token, BotSettings } = require('../database');
 
-// --- Setting Helpers ---
+// --- Setting Helpers (Pure MongoDB Storage) ---
 const getSetting = async (key, defaultValue = null) => {
-    const record = await BotSettings.findOne({ key });
-    return record ? record.value : defaultValue;
+    try {
+        const record = await BotSettings.findOne({ key });
+        return record ? record.value : defaultValue;
+    } catch (_) {
+        return defaultValue;
+    }
 };
 
 const setSetting = async (key, value) => {
-    await BotSettings.findOneAndUpdate(
-        { key },
-        { value },
-        { upsert: true, returnDocument: 'after' }
-    );
+    if (key === 'shortlinkApiKey') process.env.SHORTLINK_API_KEY = value;
+    if (key === 'shortlinkBaseUrl') process.env.SHORTLINK_BASE_URL = value;
+    try {
+        await BotSettings.findOneAndUpdate(
+            { key },
+            { value },
+            { upsert: true, returnDocument: 'after' }
+        );
+    } catch (e) {
+        console.error('Error saving setting to DB:', e.message);
+    }
 };
 
-// --- Shortlink API Wrapper ---
+// --- Shortlink API Wrapper (Direct Provider Call on Every Request) ---
 // Compatible with arolinks, vplinks, gplinks (they all use the same query format)
 const wrapShortlink = async (targetUrl) => {
     const apiKey = await getSetting('shortlinkApiKey', process.env.SHORTLINK_API_KEY);
@@ -28,13 +38,13 @@ const wrapShortlink = async (targetUrl) => {
     }
 
     try {
-        const response = await axios.get(baseUrl, {
-            params: { api: apiKey, url: targetUrl },
+        const response = await axios.get(baseUrl.trim(), {
+            params: { api: apiKey.trim(), url: targetUrl },
             timeout: 8000
         });
 
         if (response.data && response.data.status === 'success') {
-            return response.data.shortenedUrl || response.data.shortened_url;
+            return response.data.shortenedUrl || response.data.shortened_url || response.data.url || response.data.link;
         }
 
         if (response.data && response.data.status === 'error') {
@@ -43,11 +53,17 @@ const wrapShortlink = async (targetUrl) => {
         }
 
         // Fallback for APIs that return plain string without JSON status
-        if (typeof response.data === 'string' && response.data.startsWith('http')) return response.data;
+        if (typeof response.data === 'string' && response.data.trim().startsWith('http')) {
+            return response.data.trim();
+        }
 
         if (typeof response.data === 'string' && response.data.includes('<html')) {
             console.error('[Monetization] Shortlink API returned HTML instead of JSON. Check your SHORTLINK_BASE_URL. It should usually end in /api');
             return targetUrl;
+        }
+
+        if (response.data && response.data.url && typeof response.data.url === 'string') {
+            return response.data.url;
         }
 
         console.error('[Monetization] Shortlink API unexpected response:', response.data);

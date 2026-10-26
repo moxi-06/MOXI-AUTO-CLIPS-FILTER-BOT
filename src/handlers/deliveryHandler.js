@@ -6,7 +6,8 @@ const {
     sleep,
     sendToLogChannel,
     safeDeleteRoomMessages,
-    safeKickRoomUser
+    safeKickRoomUser,
+    extractMovieDetails
 } = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
 const { scheduleAutoDelete, ONE_HOUR_MS } = require('../utils/autoDeleteManager');
@@ -17,6 +18,12 @@ function getUserNameForLog(user) {
     if (user.username) return `@${user.username}`;
     if (user.first_name) return user.first_name + (user.last_name ? ` ${user.last_name}` : '');
     return `User ${user.id}`;
+}
+
+function extractRatio(title) {
+    if (!title) return '16:9';
+    const match = title.match(/\b(16:9|9:16|4:3|1:1|21:9)\b/i);
+    return match ? match[1] : '16:9';
 }
 
 // Auto-delete a bot message after N milliseconds (Default: 1 Hour)
@@ -269,13 +276,31 @@ module.exports = (bot) => {
         const clipCount = randomMovie.files?.length || randomMovie.messageIds?.length || 0;
         const startUrl = `https://t.me/${ctx.me?.username}?start=${encodeMovieLink(randomMovie)}`;
 
+        const details = extractMovieDetails(randomMovie.title);
+        const creditsLine = details.credits ? `\n<b>Edited by:</b> ${details.credits}` : '';
+        const ratio = extractRatio(randomMovie.title);
+        const cleanName = details.name.replace(/\b(16:9|9:16|4:3|1:1|21:9)\b/ig, '').replace(/[\s\-_]+$/, '').trim() || details.name;
+
+        const category = (randomMovie.categories && randomMovie.categories.length > 0)
+            ? randomMovie.categories.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join(', ')
+            : 'Love 💗';
+
         const keyboard = new InlineKeyboard()
-            .url(`⚡ Get ${randomMovie.title.toUpperCase()} (${clipCount}) »`, startUrl).row()
+            .url(`⚡ Get Clips »`, startUrl).row()
             .text('🎲 Roll Another', 'user_random')
             .text('🔙 « Back', 'user_home').row()
             .text('❌ Close', 'close_msg');
 
-        const text = `🎲 <b>Random Pick:</b>\n\n🎬 <b>${randomMovie.title}</b> • <code>${clipCount} clips</code>`;
+        const text = `🎲 <b>RANDOM PICK FOR YOU!</b>\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n` +
+            `👤 <b>Requested by:</b> <a href="tg://user?id=${ctx.from.id}">${escapeHtml(ctx.from.first_name || 'User')}</a>\n\n` +
+            `<b>Name:</b> ${cleanName}\n` +
+            `<b>Type:</b> ${category}\n` +
+            `<b>Ratio:</b> ${ratio}\n` +
+            `<b>Clips:</b> ${clipCount} Available${creditsLine}\n` +
+            `━━━━━━━━━ ✦ ━━━━━━━━━\n\n` +
+            `😍👇 Click below to get clips`;
+
         try {
             await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
         } catch (_) {
@@ -511,15 +536,38 @@ module.exports = (bot) => {
                 if (hasTutorial) keyboard.text('💡 Watch Tutorial', 'user_tutorial').row();
                 keyboard.text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
-                const msg = await ctx.reply(
-                    `🎫 <b>24-Hour Pass Required</b>\n` +
-                    `Get a free pass to download clips for 24 hours:\n\n` +
-                    `🎬 <b>${movie.title}</b> • <code>${clipCount} clips</code>`,
-                    { parse_mode: 'HTML', reply_markup: keyboard }
-                );
+                const msgContent =
+                    `🎫 <b>24-Hour Pass Required</b>\n\n` +
+                    `🎬 <b>${escapeHtml(movie.title)}</b> • <code>${clipCount} clips</code>\n\n` +
+                    `<i>Get a free pass to download clips for 24 hours:</i>`;
+
+                let msg;
+                if (movie.thumbnail) {
+                    try {
+                        msg = await ctx.replyWithPhoto(movie.thumbnail, {
+                            caption: msgContent,
+                            parse_mode: 'HTML',
+                            reply_markup: keyboard
+                        });
+                    } catch (photoErr) {
+                        console.warn('⚠️ Could not send photo with token prompt, falling back to text:', photoErr.message);
+                        msg = await ctx.reply(msgContent, { parse_mode: 'HTML', reply_markup: keyboard });
+                    }
+                } else {
+                    msg = await ctx.reply(msgContent, { parse_mode: 'HTML', reply_markup: keyboard });
+                }
+
                 autoDelete(ctx.api, ctx.chat.id, msg.message_id);
                 await releaseLock();
-                await sendToLogChannel(bot, `🔒 <b>Token Prompted</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>`);
+
+                await sendToLogChannel(
+                    bot,
+                    `🎫 <b>24h Pass Shortlink Sent to DM</b>\n\n` +
+                    `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx.from))} (<code>${ctx.from.id}</code>)\n` +
+                    `🎬 <b>Movie:</b> <i>${escapeHtml(movie.title)}</i>\n` +
+                    `🌐 <b>Shortlink:</b> ${wrappedUrl}\n` +
+                    `🎯 <b>Target:</b> <code>${tokenStartUrl}</code>`
+                );
                 return;
             }
 
@@ -540,13 +588,37 @@ module.exports = (bot) => {
             if (hasTutorial) keyboard.text('💡 Watch Tutorial', 'user_tutorial').row();
             keyboard.text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
-            const msg = await ctx.reply(
-                `🔗 <b>Unlock Clips:</b> <code>${movie.title}</code> (${clipCount} clips)\n` +
-                `<i>Verify the link below to get your clips:</i>`,
-                { parse_mode: 'HTML', reply_markup: keyboard }
-            );
+            const msgContent =
+                `🔗 <b>Unlock Clips:</b> <code>${escapeHtml(movie.title)}</code> (${clipCount} clips)\n\n` +
+                `<i>Verify the link below to get your clips:</i>`;
+
+            let msg;
+            if (movie.thumbnail) {
+                try {
+                    msg = await ctx.replyWithPhoto(movie.thumbnail, {
+                        caption: msgContent,
+                        parse_mode: 'HTML',
+                        reply_markup: keyboard
+                    });
+                } catch (photoErr) {
+                    console.warn('⚠️ Could not send photo with shortlink prompt, falling back to text:', photoErr.message);
+                    msg = await ctx.reply(msgContent, { parse_mode: 'HTML', reply_markup: keyboard });
+                }
+            } else {
+                msg = await ctx.reply(msgContent, { parse_mode: 'HTML', reply_markup: keyboard });
+            }
+
             autoDelete(ctx.api, ctx.chat.id, msg.message_id);
             await releaseLock();
+
+            await sendToLogChannel(
+                bot,
+                `🔗 <b>Shortlink Sent to DM</b>\n\n` +
+                `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx.from))} (<code>${ctx.from.id}</code>)\n` +
+                `🎬 <b>Movie:</b> <i>${escapeHtml(movie.title)}</i>\n` +
+                `🌐 <b>Shortlink:</b> ${wrappedUrl}\n` +
+                `🎯 <b>Target:</b> <code>${verifiedStart}</code>`
+            );
             return;
 
         // ─── Mode: Free (Direct Dispatch) ───────────────────────────
@@ -652,7 +724,13 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 `Join our channel below, then tap the button to receive your clips:`,
                 { reply_markup: keyboard }
             );
-            await sendToLogChannel(bot, `📢 <b>Force Sub Triggered</b>\nUser: ${getUserNameForLog(ctx.from)} (<code>${ctx.from.id}</code>)\nMovie: <i>${movie.title}</i>`);
+            await sendToLogChannel(
+                bot,
+                `📢 <b>Force Sub Triggered in DM</b>\n\n` +
+                `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx.from))} (<code>${ctx.from.id}</code>)\n` +
+                `🎬 <b>Movie:</b> <i>${escapeHtml(movie.title)}</i>\n` +
+                `🔗 <b>Channel Link:</b> ${joinUrl}`
+            );
             return;
         }
 
@@ -836,9 +914,9 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
 
         // ── 8. "Delete Old ➔ Send New" Delivery Notification ──────────
         const keyboard = new InlineKeyboard()
-            .url(`🟢 Open My Clips Room (${newMessageIds.length}) »`, invite.invite_link).row()
+            .url(`🟢 Open My Clips Room »`, invite.invite_link).row()
             .text('🔙 « Back to Menu', 'user_home').text('❌ Close', 'close_msg');
-        const cardText = `📦 <b>${movie.title}: ${newMessageIds.length} clips ready!</b>\n` +
+        const cardText = `📦 <b>${escapeHtml(movie.title)}: ${newMessageIds.length} clips ready!</b>\n` +
             `<i>Single-use download room is open for <b>30 minutes</b>:</i>`;
 
         const sentCard = await deleteOldAndSendNew(ctx, waitMsgId, cardText, { reply_markup: keyboard });
@@ -852,6 +930,16 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
                 { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } }
             );
         } catch (_) { }
+
+        // Log Room Link sent to DM
+        await sendToLogChannel(
+            bot,
+            `📦 <b>Clips Room Link Sent to DM</b>\n\n` +
+            `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx.from))} (<code>${ctx.from.id}</code>)\n` +
+            `🎬 <b>Movie:</b> <i>${escapeHtml(movie.title)}</i> (${newMessageIds.length} clips)\n` +
+            `🚪 <b>Room ID:</b> <code>${room.roomId}</code>\n` +
+            `🔗 <b>Invite Link:</b> ${invite.invite_link}`
+        );
 
 
     } catch (error) {

@@ -65,9 +65,9 @@ setInterval(() => {
 async function loadPersistedSettings() {
     try {
         const apiKey = await BotSettings.findOne({ key: 'shortlinkApiKey' });
-        const baseUrl = await BotSettings.findOne({ key: 'shortlinkBase' });
-        if (apiKey) process.env.SHORTLINK_API_KEY = apiKey.value;
-        if (baseUrl) process.env.SHORTLINK_BASE_URL = baseUrl.value;
+        const baseUrl = await BotSettings.findOne({ $or: [{ key: 'shortlinkBaseUrl' }, { key: 'shortlinkBase' }] });
+        if (apiKey && apiKey.value) process.env.SHORTLINK_API_KEY = apiKey.value;
+        if (baseUrl && baseUrl.value) process.env.SHORTLINK_BASE_URL = baseUrl.value;
         console.log('✅ Persisted settings loaded from DB.');
     } catch (e) {
         console.warn('⚠️ Could not load persisted settings:', e.message);

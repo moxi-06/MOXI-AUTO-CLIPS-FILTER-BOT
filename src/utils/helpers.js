@@ -122,15 +122,35 @@ const safeKickRoomUser = async (api, roomId, userId) => {
 };
 
 const sendToLogChannel = async (botOrApi, message) => {
-    const logChannelId = process.env.LOG_CHANNEL_ID;
-    if (!logChannelId || !botOrApi || !message) return;
+    const rawId = process.env.LOG_CHANNEL_ID;
+    if (!rawId || !botOrApi || !message) return;
+    const cleanedId = typeof rawId === 'string' ? rawId.trim().replace(/^['"]|['"]$/g, '') : rawId;
+    const targetChannelId = !isNaN(cleanedId) ? Number(cleanedId) : cleanedId;
+
     try {
         const api = botOrApi.api || botOrApi;
         if (typeof api.sendMessage === 'function') {
-            await api.sendMessage(logChannelId, message, { parse_mode: 'HTML' });
+            try {
+                await api.sendMessage(targetChannelId, message, {
+                    parse_mode: 'HTML',
+                    link_preview_options: { is_disabled: true }
+                });
+            } catch (htmlErr) {
+                // If HTML parse fails (e.g. unclosed tags or invalid entities), fallback to plain text without parse_mode
+                console.warn(`⚠️ [sendToLogChannel] HTML parse error: ${htmlErr.message}. Retrying as plain text...`);
+                const plainText = message
+                    .replace(/<b>(.*?)<\/b>/gi, '$1')
+                    .replace(/<i>(.*?)<\/i>/gi, '$1')
+                    .replace(/<code>(.*?)<\/code>/gi, '$1')
+                    .replace(/<a href="([^"]*)">(.*?)<\/a>/gi, '$2 ($1)')
+                    .replace(/<[^>]+>/g, '');
+                await api.sendMessage(targetChannelId, plainText, {
+                    link_preview_options: { is_disabled: true }
+                });
+            }
         }
     } catch (e) {
-        // Silently catch so log channel errors never crash core bot operations
+        console.error(`❌ [sendToLogChannel Failed]: ${e.message} (Target Channel: ${targetChannelId})`);
     }
 };
 
