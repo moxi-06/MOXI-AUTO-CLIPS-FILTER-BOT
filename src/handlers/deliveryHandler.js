@@ -791,6 +791,41 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             name: `Moxi: ${movie.title.substring(0, 20)}`
         });
 
+        // ── 4.5. Send Room Link to User PM FIRST (Instant Access!) ────
+        room.currentUserId = ctx.from.id.toString();
+        room.lastUsed = new Date();
+        await room.save();
+
+        const clipCount = movie.messageIds?.length || movie.files?.length || 0;
+        const keyboard = new InlineKeyboard()
+            .url(`🟢 Open My Clips Room »`, invite.invite_link).row()
+            .text('🔙 « Back to Menu', 'user_home').text('❌ Close', 'close_msg');
+        const cardText = `📦 <b>${escapeHtml(movie.title)}: Room Ready!</b>\n` +
+            `<i>Single-use download room is open for <b>30 minutes</b>.\n` +
+            `Tap below to enter now — your ${clipCount} clips are uploading!</i>`;
+
+        const sentCard = await deleteOldAndSendNew(ctx, waitMsgId, cardText, { reply_markup: keyboard });
+        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, 30 * 60 * 1000);
+
+        // Stats tracking
+        global.todayStats.deliveries++;
+        try {
+            await User.findOneAndUpdate(
+                { userId: ctx.from.id },
+                { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } }
+            );
+        } catch (_) { }
+
+        // Log Room Link sent to DM immediately
+        await sendToLogChannel(
+            bot,
+            `📦 <b>Clips Room Link Sent to DM</b>\n\n` +
+            `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx.from))} (<code>${ctx.from.id}</code>)\n` +
+            `🎬 <b>Movie:</b> <i>${escapeHtml(movie.title)}</i> (${clipCount} clips)\n` +
+            `🚪 <b>Room ID:</b> <code>${room.roomId}</code>\n` +
+            `🔗 <b>Invite Link:</b> ${invite.invite_link}`
+        );
+
         // ── 5. Upload/Copy Clips to Room in Batches of 10 ──────────────
         let newMessageIds = [];
         const dbChannel = process.env.DB_CHANNEL_ID;
@@ -982,34 +1017,7 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
             }
         }, 30 * 60 * 1000); // 30 minutes grace period
 
-        // ── 8. "Delete Old ➔ Send New" Delivery Notification ──────────
-        const keyboard = new InlineKeyboard()
-            .url(`🟢 Open My Clips Room »`, invite.invite_link).row()
-            .text('🔙 « Back to Menu', 'user_home').text('❌ Close', 'close_msg');
-        const cardText = `📦 <b>${escapeHtml(movie.title)}: ${newMessageIds.length} clips ready!</b>\n` +
-            `<i>Single-use download room is open for <b>30 minutes</b>:</i>`;
 
-        const sentCard = await deleteOldAndSendNew(ctx, waitMsgId, cardText, { reply_markup: keyboard });
-        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, 30 * 60 * 1000);
-
-        // Stats tracking
-        global.todayStats.deliveries++;
-        try {
-            await User.findOneAndUpdate(
-                { userId: ctx.from.id },
-                { $inc: { downloadCount: 1 }, $set: { lastActive: new Date() } }
-            );
-        } catch (_) { }
-
-        // Log Room Link sent to DM
-        await sendToLogChannel(
-            bot,
-            `📦 <b>Clips Room Link Sent to DM</b>\n\n` +
-            `👤 <b>User:</b> ${escapeHtml(getUserNameForLog(ctx.from))} (<code>${ctx.from.id}</code>)\n` +
-            `🎬 <b>Movie:</b> <i>${escapeHtml(movie.title)}</i> (${newMessageIds.length} clips)\n` +
-            `🚪 <b>Room ID:</b> <code>${room.roomId}</code>\n` +
-            `🔗 <b>Invite Link:</b> ${invite.invite_link}`
-        );
 
 
     } catch (error) {
