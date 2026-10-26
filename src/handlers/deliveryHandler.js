@@ -9,6 +9,7 @@ const {
     safeKickRoomUser
 } = require('../utils/helpers');
 const { getSetting, wrapShortlink, hasValidToken, grantToken, getTokenExpiry } = require('../utils/monetization');
+const { scheduleAutoDelete, ONE_HOUR_MS } = require('../utils/autoDeleteManager');
 const { InlineKeyboard } = require('grammy');
 
 function getUserNameForLog(user) {
@@ -18,20 +19,16 @@ function getUserNameForLog(user) {
     return `User ${user.id}`;
 }
 
-// Auto-delete a bot message after N milliseconds
-const autoDelete = async (api, chatId, messageId, ms = 10 * 60 * 1000) => {
-    await sleep(ms);
-    try { await api.deleteMessage(chatId, messageId); } catch (_) { }
+// Auto-delete a bot message after N milliseconds (Default: 1 Hour)
+const autoDelete = async (api, chatId, messageId, ms = ONE_HOUR_MS) => {
+    scheduleAutoDelete(api, chatId, messageId, ms);
 };
 
 // Delete command message that triggered the bot
-const deleteTriggerMessage = async (ctx, ms = 10 * 60 * 1000) => {
-    await sleep(ms);
-    try {
-        if (ctx.message) {
-            await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id);
-        }
-    } catch (_) { }
+const deleteTriggerMessage = async (ctx, ms = ONE_HOUR_MS) => {
+    if (ctx.message?.message_id) {
+        scheduleAutoDelete(ctx.api, ctx.chat.id, ctx.message.message_id, ms);
+    }
 };
 
 // "Delete Old ➔ Send New" Notification Engine:
@@ -202,11 +199,11 @@ module.exports = (bot) => {
     // Interactive User Dashboard Callback Handlers (Zero Delay)
     // ────────────────────────────────────────────────────────────────
 
-    // 1. PM All Movies Browser (with 10 items per page)
+    // 1. PM All Movies Browser (with dynamic items per page)
     bot.callbackQuery(/^user_browse_(\d+)$/, async (ctx) => {
         await ctx.answerCallbackQuery({ text: '⚡ Loading movies...' });
         const page = parseInt(ctx.match[1], 10) || 0;
-        const limit = 10;
+        const limit = parseInt(await getSetting('itemsPerPage', 10), 10) || 10;
         const total = await Movie.countDocuments();
         const movies = await Movie.find({}, { title: 1, files: 1, messageIds: 1 })
             .sort({ title: 1 })
@@ -354,16 +351,29 @@ module.exports = (bot) => {
         try {
             const tutStr = await getSetting('tutorial');
             if (!tutStr) {
-                return ctx.reply('ℹ️ No tutorial video configured yet.', { parse_mode: 'HTML' });
+                const sent = await ctx.reply('ℹ️ No tutorial video configured yet.', {
+                    parse_mode: 'HTML',
+                    reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+                });
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
+                return;
             }
             const tutData = JSON.parse(tutStr);
-            const captionOpts = { caption: '💡 <b>How to verify link:</b>', parse_mode: 'HTML' };
+            const keyboard = new InlineKeyboard().text('❌ Close', 'close_msg');
+            const captionOpts = { caption: '💡 <b>How to verify link:</b>', parse_mode: 'HTML', reply_markup: keyboard };
             if (tutData.type === 'video') {
-                await ctx.replyWithVideo(tutData.fileId, captionOpts);
+                const sent = await ctx.replyWithVideo(tutData.fileId, captionOpts);
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
             } else if (tutData.type === 'document') {
-                await ctx.replyWithDocument(tutData.fileId, captionOpts);
+                const sent = await ctx.replyWithDocument(tutData.fileId, captionOpts);
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
             } else if (tutData.type === 'link') {
-                await ctx.reply(`💡 <b>How to verify link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, { parse_mode: 'HTML', disable_web_page_preview: true });
+                const sent = await ctx.reply(`💡 <b>How to verify link:</b>\n\n👉 <a href="${tutData.text}">Watch Tutorial Here</a>`, {
+                    parse_mode: 'HTML',
+                    disable_web_page_preview: true,
+                    reply_markup: keyboard
+                });
+                autoDelete(ctx.api, ctx.chat.id, sent.message_id, ONE_HOUR_MS);
             }
         } catch (e) {
             console.error('Tutorial send error:', e.message);
@@ -446,7 +456,7 @@ module.exports = (bot) => {
             const userId = moviePayload.replace('token_', '');
             if (ctx.from.id.toString() !== userId) {
                 const e = await ctx.reply('❌ This pass link belongs to another user.', {
-                    reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+                    reply_markup: new InlineKeyboard().text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg')
                 });
                 autoDelete(ctx.api, ctx.chat.id, e.message_id);
                 await releaseLock();
@@ -456,7 +466,7 @@ module.exports = (bot) => {
             const expireStr = expiresAt.toLocaleString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
             const msg = await ctx.reply(
                 `🎫 <b>24-Hour Pass Active!</b>\nValid until ${expireStr}.\nYou have unlimited clip downloads!`,
-                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg') }
+                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg') }
             );
             autoDelete(ctx.api, ctx.chat.id, msg.message_id);
             await releaseLock();
@@ -477,7 +487,7 @@ module.exports = (bot) => {
         if (!movie || (!movie.messageIds?.length && !movie.files?.length)) {
             const e = await ctx.reply('❌ <b>Clips not found!</b>\nThis movie has been removed or does not exist.', {
                 parse_mode: 'HTML',
-                reply_markup: new InlineKeyboard().text('❌ Close', 'close_msg')
+                reply_markup: new InlineKeyboard().text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg')
             });
             autoDelete(ctx.api, ctx.chat.id, e.message_id);
             await releaseLock();
@@ -499,7 +509,7 @@ module.exports = (bot) => {
 
                 const keyboard = new InlineKeyboard().url('🟢 Unlock 24h Free Pass »', wrappedUrl).row();
                 if (hasTutorial) keyboard.text('💡 Watch Tutorial', 'user_tutorial').row();
-                keyboard.text('❌ Close', 'close_msg');
+                keyboard.text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
                 const msg = await ctx.reply(
                     `🎫 <b>24-Hour Pass Required</b>\n` +
@@ -528,7 +538,7 @@ module.exports = (bot) => {
 
             const keyboard = new InlineKeyboard().url('🟢 Verify & Open Clips »', wrappedUrl).row();
             if (hasTutorial) keyboard.text('💡 Watch Tutorial', 'user_tutorial').row();
-            keyboard.text('❌ Close', 'close_msg');
+            keyboard.text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
             const msg = await ctx.reply(
                 `🔗 <b>Unlock Clips:</b> <code>${movie.title}</code> (${clipCount} clips)\n` +
@@ -587,7 +597,8 @@ module.exports = (bot) => {
 
             const keyboard = new InlineKeyboard()
                 .url('🟣 Join Channel »', joinUrl).row()
-                .text('🟢 I\'ve Joined - Send Clips »', `fs_${encodeMovieLink(movie)}`);
+                .text('🟢 I\'ve Joined - Send Clips »', `fs_${encodeMovieLink(movie)}`).row()
+                .text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
             return await deleteOldAndSendNew(ctx, ctx.callbackQuery.message.message_id,
                 `📢 <b>You haven't joined yet!</b>\nJoin our channel first, then tap the button below:`,
@@ -633,7 +644,8 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
 
             const keyboard = new InlineKeyboard()
                 .url('🟣 Join Channel »', joinUrl).row()
-                .text('🟢 I\'ve Joined - Send Clips »', `fs_${encodeMovieLink(movie)}`);
+                .text('🟢 I\'ve Joined - Send Clips »', `fs_${encodeMovieLink(movie)}`).row()
+                .text('🔙 « Back', 'user_home').text('❌ Close', 'close_msg');
 
             await deleteOldAndSendNew(ctx, waitMsgId,
                 `📢 <b>Join our channel to continue:</b>\n` +
@@ -825,12 +837,12 @@ async function deliverMovie(ctx, bot, movie, waitMsgId) {
         // ── 8. "Delete Old ➔ Send New" Delivery Notification ──────────
         const keyboard = new InlineKeyboard()
             .url(`🟢 Open My Clips Room (${newMessageIds.length}) »`, invite.invite_link).row()
-            .text('❌ Close', 'close_msg');
+            .text('🔙 « Back to Menu', 'user_home').text('❌ Close', 'close_msg');
         const cardText = `📦 <b>${movie.title}: ${newMessageIds.length} clips ready!</b>\n` +
             `<i>Single-use download room is open for <b>30 minutes</b>:</i>`;
 
         const sentCard = await deleteOldAndSendNew(ctx, waitMsgId, cardText, { reply_markup: keyboard });
-        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, 30 * 60 * 1000);
+        autoDelete(ctx.api, ctx.chat.id, sentCard.message_id, ONE_HOUR_MS);
 
         // Stats tracking
         global.todayStats.deliveries++;

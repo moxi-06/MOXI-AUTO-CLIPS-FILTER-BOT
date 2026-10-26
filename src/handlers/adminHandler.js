@@ -512,7 +512,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_apikey' };
 
-        const keyboard = new InlineKeyboard().text('🔴 Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_mode_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
 
         await ctx.editMessageText(
             `🔑 <b>Set Shortlink API Key:</b>\n\n` +
@@ -564,7 +566,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_endpoint' };
 
-        const keyboard = new InlineKeyboard().text('🔴 Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_set_endpoint')
+            .text('🔴 Cancel', 'admin_cancel_input');
         await ctx.editMessageText(
             `🌐 <b>Enter Custom Shortlink API URL:</b>\n\n` +
             `Send the full endpoint URL as a text message here.\n` +
@@ -617,7 +621,7 @@ module.exports = (bot) => {
             return ctx.reply(
                 `❌ <b>Shortlink Not Configured:</b>\n` +
                 `Please set both Shortlink API Key and Endpoint URL first!`,
-                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('⚙️ Settings', 'admin_mode_menu').text('❌ Close', 'close_msg') }
+                { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🔙 « Back', 'admin_mode_menu').text('❌ Close', 'close_msg') }
             );
         }
 
@@ -630,7 +634,7 @@ module.exports = (bot) => {
                 {
                     parse_mode: 'HTML',
                     disable_web_page_preview: true,
-                    reply_markup: new InlineKeyboard().text('⚙️ Settings', 'admin_mode_menu').text('❌ Close', 'close_msg')
+                    reply_markup: new InlineKeyboard().text('🔙 « Back', 'admin_mode_menu').text('❌ Close', 'close_msg')
                 }
             );
         } else {
@@ -641,10 +645,70 @@ module.exports = (bot) => {
                 `• Check that your endpoint ends in <code>/api</code> (e.g. <code>https://arolinks.com/api</code>).`,
                 {
                     parse_mode: 'HTML',
-                    reply_markup: new InlineKeyboard().text('⚙️ Settings', 'admin_mode_menu').text('❌ Close', 'close_msg')
+                    reply_markup: new InlineKeyboard().text('🔙 « Back', 'admin_mode_menu').text('❌ Close', 'close_msg')
                 }
             );
         }
+    });
+
+    // ── Filter Page Size Settings Menu ──────────────────────────────
+    async function renderPageSizeMenu(ctx, isEdit = true) {
+        const current = parseInt(await getSetting('itemsPerPage', 10), 10) || 10;
+        const keyboard = new InlineKeyboard()
+            .text(`${current === 5 ? '✅ 5' : '5'}`, 'setpagesize_5')
+            .text(`${current === 8 ? '✅ 8' : '8'}`, 'setpagesize_8')
+            .text(`${current === 10 ? '✅ 10 (Default)' : '10'}`, 'setpagesize_10').row()
+            .text(`${current === 15 ? '✅ 15' : '15'}`, 'setpagesize_15')
+            .text(`${current === 20 ? '✅ 20' : '20'}`, 'setpagesize_20')
+            .text(`${current === 25 ? '✅ 25' : '25'}`, 'setpagesize_25').row()
+            .text(`${current === 30 ? '✅ 30' : '30'}`, 'setpagesize_30')
+            .text(`${current === 50 ? '✅ 50 (Max)' : '50'}`, 'setpagesize_50').row()
+            .text('✏️ Enter Custom (1-50)', 'admin_custom_pagesize_prompt').row()
+            .text('🔙 « Back', 'admin_panel')
+            .text('❌ Close', 'close_msg');
+
+        const text = `📄 <b>FILTER NAMES PER PAGE</b>\n\n` +
+            `• <b>Current Limit:</b> <code>${current} filters / page</code>\n` +
+            `• <b>Telegram Allowed Range:</b> <code>1 to 50 buttons</code>\n\n` +
+            `<i>Tap any preset or enter any custom number between 1 and 50:</i>`;
+
+        if (isEdit) {
+            try {
+                return await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+            } catch (_) { }
+        }
+        return await ctx.reply(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    }
+
+    bot.callbackQuery('admin_pagesize_menu', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        await renderPageSizeMenu(ctx, true);
+    });
+
+    bot.callbackQuery(/^setpagesize_(\d+)$/, async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const size = parseInt(ctx.match[1], 10);
+        await setSetting('itemsPerPage', size);
+        await ctx.answerCallbackQuery({ text: `✅ Page size set to ${size} filters!` });
+        await renderPageSizeMenu(ctx, true);
+    });
+
+    bot.callbackQuery('admin_custom_pagesize_prompt', async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        await ctx.answerCallbackQuery();
+        global.adminState[ctx.from.id] = { action: 'awaiting_pagesize' };
+
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_pagesize_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
+
+        await ctx.editMessageText(
+            `✏️ <b>Enter Custom Page Size (1-50):</b>\n\n` +
+            `Send any number between <b>1 and 50</b> as a text message here.\n\n` +
+            `<i>Example: <code>12</code> or <code>20</code></i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
     });
 
     // ── Tutorial Video Menu ─────────────────────────────────────────
@@ -680,7 +744,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_tutorial' };
 
-        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_tut_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
         await ctx.editMessageText(
             `🎥 <b>SEND TUTORIAL VIDEO NOW:</b>\n\n` +
             `• Forward or upload any video or document\n` +
@@ -732,7 +798,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_promo' };
 
-        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_promo_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
         await ctx.editMessageText(
             `📢 <b>Set Room Promotional Message:</b>\n\n` +
             `Send or forward ANY of the following here:\n` +
@@ -775,7 +843,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_delclip' };
 
-        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_delclip_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
         await ctx.editMessageText(
             `🗑️ <b>Send Movie Name and Message ID:</b>\n\n` +
             `Format: <code>Movie Title | Message ID</code>\n\n` +
@@ -890,6 +960,18 @@ module.exports = (bot) => {
         await renderModeSettingsMenu(ctx, false);
     });
 
+    // /setpagesize / /setlimit Command
+    bot.command(['setpagesize', 'setlimit'], async (ctx) => {
+        if (!isAdmin(ctx)) return;
+        const arg = (ctx.match || '').trim();
+        const num = parseInt(arg, 10);
+        if (!arg || isNaN(num) || num < 1 || num > 50) {
+            return ctx.reply('⚙️ <b>Usage:</b> <code>/setpagesize [1-50]</code>\n<i>Example: /setpagesize 15</i>', { parse_mode: 'HTML' });
+        }
+        await setSetting('itemsPerPage', num);
+        return ctx.reply(`✅ <b>Filters per page set to:</b> <code>${num}</code>`, { parse_mode: 'HTML' });
+    });
+
     // ── Force Sub Menu ──────────────────────────────────────────────
     bot.callbackQuery('admin_forcesub_menu', async (ctx) => {
         if (!isAdmin(ctx)) return;
@@ -915,7 +997,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_forcesub' };
 
-        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_forcesub_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
         await ctx.editMessageText(
             `📢 <b>Send Channel ID or Username:</b>\n\n` +
             `• Public Channel: <code>@channelname</code>\n` +
@@ -988,7 +1072,9 @@ module.exports = (bot) => {
         await ctx.answerCallbackQuery();
         global.adminState[ctx.from.id] = { action: 'awaiting_room' };
 
-        const keyboard = new InlineKeyboard().text('❌ Cancel', 'admin_cancel_input');
+        const keyboard = new InlineKeyboard()
+            .text('🔙 « Back', 'admin_rooms_menu')
+            .text('🔴 Cancel', 'admin_cancel_input');
         await ctx.editMessageText(
             `🏠 <b>Add Room Channel:</b>\n\n` +
             `Send the Telegram Channel ID (e.g. <code>-1002357848749</code>).\n\n` +
@@ -1216,7 +1302,8 @@ module.exports = (bot) => {
         if (!isAdmin(ctx)) return;
 
         const keyboard = new InlineKeyboard()
-            .text('✅ Yes, Clean Blocked', 'users_clean_export')
+            .text('✅ Yes, Clean Blocked', 'users_clean_export').row()
+            .text('🔙 « Back', 'admin_panel')
             .text('❌ Cancel', 'users_cancel');
 
         await ctx.reply(
@@ -1274,13 +1361,17 @@ module.exports = (bot) => {
             const buffer = Buffer.from(jsonContent, 'utf-8');
             const { InputFile } = require('grammy');
 
+            const doneKeyboard = new InlineKeyboard()
+                .text('🔙 « Back to Admin', 'admin_panel')
+                .text('❌ Close', 'close_msg');
+
             try {
                 await ctx.editMessageText(
                     `✅ <b>User Cleanup Complete!</b>\n\n` +
                     `• Removed: <b>${cleanedCount}</b> blocked users\n` +
                     `• Remaining: <b>${remainingUsers.length}</b> users\n\n` +
                     `<i>Export file attached below:</i>`,
-                    { parse_mode: 'HTML' }
+                    { parse_mode: 'HTML', reply_markup: doneKeyboard }
                 );
             } catch (e) {
                 if (!e.message.includes('message is not modified')) throw e;
@@ -1306,6 +1397,6 @@ module.exports = (bot) => {
     bot.callbackQuery('users_cancel', async (ctx) => {
         if (!isAdmin(ctx)) return;
         await ctx.answerCallbackQuery();
-        await ctx.editMessageText(`❌ <b>Cancelled</b>`, { parse_mode: 'HTML' });
+        await renderAdminPanel(ctx, true);
     });
 };

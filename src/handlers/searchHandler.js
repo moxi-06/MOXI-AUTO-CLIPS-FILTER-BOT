@@ -1,5 +1,6 @@
 const { Movie, User, PaginationSession } = require('../database');
 const { cleanMovieName, encodeMovieLink, sendToLogChannel, escapeHtml, extractMovieDetails } = require('../utils/helpers');
+const { getSetting } = require('../utils/monetization');
 const { InlineKeyboard } = require('grammy');
 
 const safeAnswer = async (ctx, options = {}) => {
@@ -13,6 +14,12 @@ const safeAnswer = async (ctx, options = {}) => {
 };
 
 const ITEMS_PER_PAGE = 10;
+
+async function getPageSize() {
+    const val = await getSetting('itemsPerPage', 10);
+    const parsed = parseInt(val, 10);
+    return (!isNaN(parsed) && parsed >= 1 && parsed <= 50) ? parsed : 10;
+}
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -267,7 +274,7 @@ async function findSimilarMovies(movie, limit = 3) {
     }).limit(limit);
 }
 
-function buildFilterKeyboard(movies, page, total) {
+function buildFilterKeyboard(movies, page, total, pageSize = 10) {
     const keyboard = new InlineKeyboard();
 
     movies.forEach((m) => {
@@ -276,7 +283,7 @@ function buildFilterKeyboard(movies, page, total) {
         keyboard.text(`▫️ ${m.title.toUpperCase()} (${count})`, `f_${m._id}`).row();
     });
 
-    const totalPages = Math.ceil(total / ITEMS_PER_PAGE);
+    const totalPages = Math.ceil(total / pageSize);
 
     if (page > 0) {
         keyboard.text('◀ Prev', `fp_${page - 1}`);
@@ -498,12 +505,14 @@ module.exports = (bot) => {
                 } catch (_) { }
             }
 
+            const pageSize = await getPageSize();
             const shuffledIds = allMovies.map(m => m._id).sort(() => Math.random() - 0.5);
-            const pageMovies = await Movie.find({ _id: { $in: shuffledIds.slice(0, ITEMS_PER_PAGE) } }).lean();
-            const orderedMovies = shuffledIds.slice(0, ITEMS_PER_PAGE).map(id => pageMovies.find(m => m._id.toString() === id.toString()));
+            const pageMovies = await Movie.find({ _id: { $in: shuffledIds.slice(0, pageSize) } }).lean();
+            const orderedMovies = shuffledIds.slice(0, pageSize).map(id => pageMovies.find(m => m._id.toString() === id.toString()));
 
-            const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length);
-            const helpText = `🎬 <b>Available Movies</b> (Page 1/${Math.ceil(shuffledIds.length / ITEMS_PER_PAGE)})\n` +
+            const keyboard = buildFilterKeyboard(orderedMovies, 0, shuffledIds.length, pageSize);
+            const totalPages = Math.ceil(shuffledIds.length / pageSize);
+            const helpText = `🎬 <b>Available Movies</b> (Page 1/${totalPages})\n` +
                 `<i>Total: ${shuffledIds.length} titles • Tap below to get clips in PM:</i>`;
 
             const sent = await ctx.reply(helpText, {
@@ -698,13 +707,17 @@ module.exports = (bot) => {
     };
 
     // Helper to send or update a movie result card for callbacks
-    const respondWithMovieCard = async (ctx, movie) => {
+    const respondWithMovieCard = async (ctx, movie, showBackToFilters = true) => {
         const botUsername = process.env.BOT_USERNAME || (ctx.me ? ctx.me.username : '');
         const clipCount = movie.files?.length || movie.messageIds?.length || 0;
         const privateStart = `https://t.me/${botUsername}?start=${encodeMovieLink(movie)}`;
         const keyboard = new InlineKeyboard()
-            .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row()
-            .text('❌ Close', 'close_msg');
+            .url(`⚡ Get Clips (${clipCount}) »`, privateStart).row();
+
+        if (showBackToFilters) {
+            keyboard.text('🔙 « Back to Filters', 'return_filters').row();
+        }
+        keyboard.text('❌ Close', 'close_msg');
 
         const reqSource = ctx.from;
         const reqName = reqSource.first_name || reqSource.username || 'User';
@@ -742,7 +755,7 @@ module.exports = (bot) => {
             await movie.save();
             await updateUserStats(ctx.from.id, 'search');
             await ctx.answerCallbackQuery({ text: '⚡ Clips ready!' });
-            await respondWithMovieCard(ctx, movie);
+            await respondWithMovieCard(ctx, movie, false);
         } catch (error) {
             console.error('Typo callback error:', error.message);
         }
@@ -758,7 +771,7 @@ module.exports = (bot) => {
             await movie.save();
             await updateUserStats(ctx.from.id, 'search');
             await ctx.answerCallbackQuery({ text: '⚡ Clips ready!' });
-            await respondWithMovieCard(ctx, movie);
+            await respondWithMovieCard(ctx, movie, true);
         } catch (error) {
             console.error('Filter callback error:', error);
         }
@@ -774,7 +787,7 @@ module.exports = (bot) => {
             await movie.save();
             await updateUserStats(ctx.from.id, 'search');
             await ctx.answerCallbackQuery({ text: '⚡ Clips ready!' });
-            await respondWithMovieCard(ctx, movie);
+            await respondWithMovieCard(ctx, movie, false);
         } catch (error) {
             console.error('Search callback error:', error);
         }
@@ -793,16 +806,18 @@ module.exports = (bot) => {
                 });
             }
 
-            const start = page * ITEMS_PER_PAGE;
-            const end = start + ITEMS_PER_PAGE;
+            const pageSize = await getPageSize();
+            const start = page * pageSize;
+            const end = start + pageSize;
             const pageIds = session.movieIds.slice(start, end);
 
             const pageMovies = await Movie.find({ _id: { $in: pageIds } });
             const orderedMovies = pageIds.map(id => pageMovies.find(m => m._id.equals(id)));
 
-            const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length);
+            const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length, pageSize);
+            const totalPages = Math.ceil(session.movieIds.length / pageSize);
 
-            const helpText = `🎬 <b>Available Movies</b> (Page ${page + 1}/${Math.ceil(session.movieIds.length / ITEMS_PER_PAGE)})\n` +
+            const helpText = `🎬 <b>Available Movies</b> (Page ${page + 1}/${totalPages})\n` +
                 `<i>Total: ${session.movieIds.length} titles • Tap below to get clips in PM:</i>`;
 
             await safeAnswer(ctx);
@@ -820,6 +835,57 @@ module.exports = (bot) => {
         } catch (error) {
             console.error('Pagination error:', error);
             await ctx.answerCallbackQuery({ text: '❌ Navigation error', show_alert: true });
+        }
+    });
+
+    // Return to filter list from a movie result card
+    bot.callbackQuery('return_filters', async (ctx) => {
+        try {
+            const chatIdStr = String(ctx.chat?.id || ctx.callbackQuery?.message?.chat?.id);
+            const session = await PaginationSession.findOne({ chatId: chatIdStr });
+            if (!session || !session.movieIds?.length) {
+                return await ctx.answerCallbackQuery({
+                    text: '📑 Filter list expired. Type /filters to start again!',
+                    show_alert: true
+                });
+            }
+
+            const pageSize = await getPageSize();
+            const page = session.page || 0;
+            const start = page * pageSize;
+            const end = start + pageSize;
+            const pageIds = session.movieIds.slice(start, end);
+
+            const pageMovies = await Movie.find({ _id: { $in: pageIds } });
+            const orderedMovies = pageIds.map(id => pageMovies.find(m => m._id.equals(id)));
+
+            const keyboard = buildFilterKeyboard(orderedMovies, page, session.movieIds.length, pageSize);
+            const totalPages = Math.ceil(session.movieIds.length / pageSize);
+
+            const helpText = `🎬 <b>Available Movies</b> (Page ${page + 1}/${totalPages})\n` +
+                `<i>Total: ${session.movieIds.length} titles • Tap below to get clips in PM:</i>`;
+
+            await safeAnswer(ctx);
+
+            if (ctx.callbackQuery?.message?.photo) {
+                try {
+                    await ctx.deleteMessage();
+                } catch (_) { }
+            } else {
+                try {
+                    await ctx.editMessageText(helpText, {
+                        parse_mode: 'HTML',
+                        reply_markup: keyboard
+                    });
+                } catch (e) {
+                    if (!e.message.includes('message is not modified')) {
+                        await ctx.reply(helpText, { parse_mode: 'HTML', reply_markup: keyboard });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('return_filters error:', error);
+            await ctx.answerCallbackQuery({ text: '❌ Could not return to filters', show_alert: true });
         }
     });
 };
